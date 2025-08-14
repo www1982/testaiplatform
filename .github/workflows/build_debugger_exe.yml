@@ -123,7 +123,7 @@ jobs:
           cd ..
 
       - name: Upload executable artifact
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4
         with:
           name: ONI_AI_Debugger_Windows
           path: dist/ONI_AI_Debugger_Windows.zip
@@ -194,7 +194,7 @@ jobs:
           cd ..
 
       - name: Upload executable artifact
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4
         with:
           name: ONI_AI_Debugger_Linux
           path: dist/ONI_AI_Debugger_Linux.tar.gz

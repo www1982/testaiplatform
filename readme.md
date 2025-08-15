@@ -1,1830 +1,1313 @@
-我将为您创建一个完整的 PyDev-Toolkit 应用程序。让我按照您的要求，逐个模块生成代码。
+# DevDeck - 现代跨平台开发工具平台
+
+## 技术选型决策
+
+我选择 **Tauri + React + TypeScript + Ant Design** 作为技术栈：
+
+### 为什么选择 Tauri 而非 Electron：
+
+1. **性能优势**：Tauri 应用体积小 10-100 倍（~10MB vs ~150MB）
+2. **内存占用**：Tauri 使用系统 WebView，内存占用显著降低
+3. **安全性**：Rust 后端提供更好的类型安全和内存安全
+4. **启动速度**：原生性能，启动速度快 2-3 倍
+
+### 技术栈：
+
+- **框架**: Tauri 2.0
+- **前端**: React 18 + TypeScript
+- **UI 库**: Ant Design 5.0 (提供类 VS Code 的专业外观)
+- **状态管理**: Zustand
+- **后端**: Rust (Tauri 核心)
 
 ## 项目结构
 
 ```
-PyDev-Toolkit/
-├── desktop_app/
-│   ├── __init__.py
-│   └── main.py
-├── websocket_tool/
-│   ├── __init__.py
-│   ├── connection_window.py
-│   ├── websocket_thread.py
-│   ├── signal_bridge.py
-│   └── views/
-│       ├── __init__.py
-│       ├── base_view.py
-│       ├── json_tree_view.py
-│       └── raw_log_view.py
-├── conda_manager/
-│   ├── __init__.py
-│   ├── conda_service.py
-│   └── conda_widget.py
-├── vscode_integration/
-│   ├── __init__.py
-│   └── manager.py
-├── utils/
-│   ├── __init__.py
-│   └── logger.py
-├── environment.yml
-├── requirements.txt
-├── main.py
+DevDeck/
+├── src/                      # React 前端源码
+│   ├── components/
+│   │   ├── TabManager/       # 标签页管理组件
+│   │   ├── WebSocketDebugger/# WebSocket 调试器
+│   │   ├── CondaManager/     # Conda 管理器
+│   │   └── CommandPalette/   # 命令面板
+│   ├── views/                # 视图插件
+│   │   ├── JsonTreeView.tsx
+│   │   └── RawLogView.tsx
+│   ├── stores/               # 状态管理
+│   ├── hooks/                # 自定义 Hooks
+│   ├── App.tsx
+│   └── main.tsx
+├── src-tauri/                # Rust 后端
+│   ├── src/
+│   │   ├── main.rs
+│   │   ├── conda/            # Conda 管理模块
+│   │   ├── vscode/           # VS Code 集成
+│   │   └── websocket/        # WebSocket 处理
+│   ├── Cargo.toml
+│   └── tauri.conf.json
+├── package.json
+├── tsconfig.json
+├── vite.config.ts
 └── .github/
     └── workflows/
         └── build.yml
 ```
 
-## 第一部分：应用程序核心与主窗口
+## 第一部分：平台核心架构与 UI
 
-### desktop_app/**init**.py
+### package.json
 
-```python
-"""PyDev-Toolkit Desktop Application"""
-__version__ = "1.0.0"
+```json
+{
+  "name": "devdeck",
+  "private": true,
+  "version": "1.0.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc && vite build",
+    "preview": "vite preview",
+    "tauri": "tauri",
+    "tauri:dev": "tauri dev",
+    "tauri:build": "tauri build"
+  },
+  "dependencies": {
+    "@ant-design/icons": "^5.2.6",
+    "@monaco-editor/react": "^4.6.0",
+    "@tauri-apps/api": "^2.0.0",
+    "antd": "^5.11.5",
+    "react": "^18.2.0",
+    "react-dom": "^18.2.0",
+    "zustand": "^4.4.7",
+    "uuid": "^9.0.1",
+    "react-json-tree": "^0.18.0",
+    "react-hotkeys-hook": "^4.4.1"
+  },
+  "devDependencies": {
+    "@tauri-apps/cli": "^2.0.0",
+    "@types/react": "^18.2.45",
+    "@types/react-dom": "^18.2.18",
+    "@types/uuid": "^9.0.7",
+    "@vitejs/plugin-react": "^4.2.1",
+    "typescript": "^5.3.3",
+    "vite": "^5.0.10"
+  }
+}
 ```
 
-### desktop_app/main.py
+### tsconfig.json
 
-```python
-import sys
-import os
-from pathlib import Path
-from PySide6.QtWidgets import (
-    QApplication, QMainWindow, QMdiArea, QMenuBar,
-    QStatusBar, QMenu, QDialog, QVBoxLayout, QFileDialog,
-    QLabel, QPushButton, QHBoxLayout, QLineEdit, QComboBox
-)
-from PySide6.QtCore import Qt, Signal, QTimer
-from PySide6.QtGui import QAction, QIcon
-
-# Add parent directory to path for imports
-sys.path.insert(0, str(Path(__file__).parent.parent))
-
-from websocket_tool.connection_window import ConnectionWindow
-from conda_manager.conda_widget import CondaManagerWidget
-from conda_manager.conda_service import CondaService
-from vscode_integration.manager import VSCodeManager
-from utils.logger import setup_logger
-
-
-class VSCodeConfigDialog(QDialog):
-    """Dialog for configuring VS Code workspace with Conda environment"""
-
-    def __init__(self, parent=None):
-        super().__init__(parent)
-        self.setWindowTitle("Configure VS Code Workspace")
-        self.setModal(True)
-        self.setMinimumWidth(500)
-
-        self.conda_service = CondaService()
-        self.vscode_manager = VSCodeManager()
-        self.setup_ui()
-        self.load_environments()
-
-    def setup_ui(self):
-        layout = QVBoxLayout()
-
-        # Project path selection
-        project_layout = QHBoxLayout()
-        project_layout.addWidget(QLabel("Project Path:"))
-        self.project_path_edit = QLineEdit()
-        project_layout.addWidget(self.project_path_edit)
-        self.browse_btn = QPushButton("Browse...")
-        self.browse_btn.clicked.connect(self.browse_project)
-        project_layout.addWidget(self.browse_btn)
-        layout.addLayout(project_layout)
-
-        # Environment selection
-        env_layout = QHBoxLayout()
-        env_layout.addWidget(QLabel("Conda Environment:"))
-        self.env_combo = QComboBox()
-        env_layout.addWidget(self.env_combo)
-        layout.addLayout(env_layout)
-
-        # Buttons
-        button_layout = QHBoxLayout()
-        self.open_btn = QPushButton("Open in VS Code")
-        self.open_btn.clicked.connect(self.open_vscode)
-        self.cancel_btn = QPushButton("Cancel")
-        self.cancel_btn.clicked.connect(self.reject)
-        button_layout.addWidget(self.open_btn)
-        button_layout.addWidget(self.cancel_btn)
-        layout.addLayout(button_layout)
-
-        self.setLayout(layout)
-
-    def browse_project(self):
-        path = QFileDialog.getExistingDirectory(self, "Select Project Directory")
-        if path:
-            self.project_path_edit.setText(path)
-
-    def load_environments(self):
-        environments = self.conda_service.list_environments_sync()
-        self.env_combo.addItems([env['name'] for env in environments])
-
-    def open_vscode(self):
-        project_path = self.project_path_edit.text()
-        env_name = self.env_combo.currentText()
-
-        if not project_path:
-            return
-
-        self.vscode_manager.open_project_with_env(project_path, env_name)
-        self.accept()
-
-
-class MainWindow(QMainWindow):
-    """Main application window with MDI support"""
-
-    def __init__(self):
-        super().__init__()
-        self.logger = setup_logger(__name__)
-        self.setWindowTitle("PyDev-Toolkit - Python Developer Toolkit")
-        self.setGeometry(100, 100, 1400, 900)
-
-        # Initialize MDI area
-        self.mdi_area = QMdiArea()
-        self.mdi_area.setHorizontalScrollBarPolicy(Qt.ScrollBarAsNeeded)
-        self.mdi_area.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
-        self.setCentralWidget(self.mdi_area)
-
-        # Setup UI components
-        self.setup_menu_bar()
-        self.setup_status_bar()
-
-        # Window counter for unique naming
-        self.ws_window_counter = 0
-
-        self.logger.info("MainWindow initialized successfully")
-
-    def setup_menu_bar(self):
-        """Create and configure the menu bar"""
-        menubar = self.menuBar()
-
-        # File menu
-        file_menu = menubar.addMenu("&File")
-
-        new_ws_action = QAction("&New WebSocket Connection", self)
-        new_ws_action.setShortcut("Ctrl+N")
-        new_ws_action.setStatusTip("Create a new WebSocket connection")
-        new_ws_action.triggered.connect(self.new_websocket_connection)
-        file_menu.addAction(new_ws_action)
-
-        file_menu.addSeparator()
-
-        exit_action = QAction("&Exit", self)
-        exit_action.setShortcut("Ctrl+Q")
-        exit_action.setStatusTip("Exit application")
-        exit_action.triggered.connect(self.close)
-        file_menu.addAction(exit_action)
-
-        # Tools menu
-        tools_menu = menubar.addMenu("&Tools")
-
-        conda_manager_action = QAction("&Conda Environment Manager", self)
-        conda_manager_action.setShortcut("Ctrl+E")
-        conda_manager_action.setStatusTip("Manage Conda environments")
-        conda_manager_action.triggered.connect(self.open_conda_manager)
-        tools_menu.addAction(conda_manager_action)
-
-        tools_menu.addSeparator()
-
-        vscode_config_action = QAction("Configure &VS Code Workspace", self)
-        vscode_config_action.setShortcut("Ctrl+Shift+V")
-        vscode_config_action.setStatusTip("Configure VS Code with Conda environment")
-        vscode_config_action.triggered.connect(self.configure_vscode)
-        tools_menu.addAction(vscode_config_action)
-
-        # Window menu
-        window_menu = menubar.addMenu("&Window")
-
-        cascade_action = QAction("&Cascade", self)
-        cascade_action.setStatusTip("Cascade windows")
-        cascade_action.triggered.connect(self.mdi_area.cascadeSubWindows)
-        window_menu.addAction(cascade_action)
-
-        tile_action = QAction("&Tile", self)
-        tile_action.setStatusTip("Tile windows")
-        tile_action.triggered.connect(self.mdi_area.tileSubWindows)
-        window_menu.addAction(tile_action)
-
-        window_menu.addSeparator()
-
-        close_all_action = QAction("Close &All", self)
-        close_all_action.setStatusTip("Close all windows")
-        close_all_action.triggered.connect(self.mdi_area.closeAllSubWindows)
-        window_menu.addAction(close_all_action)
-
-        # Help menu
-        help_menu = menubar.addMenu("&Help")
-
-        about_action = QAction("&About", self)
-        about_action.setStatusTip("About PyDev-Toolkit")
-        about_action.triggered.connect(self.show_about)
-        help_menu.addAction(about_action)
-
-    def setup_status_bar(self):
-        """Create and configure the status bar"""
-        self.status_bar = QStatusBar()
-        self.setStatusBar(self.status_bar)
-        self.status_bar.showMessage("Ready")
-
-        # Add permanent widget to show connection count
-        self.connection_label = QLabel("Connections: 0")
-        self.status_bar.addPermanentWidget(self.connection_label)
-
-        # Update connection count periodically
-        self.update_timer = QTimer()
-        self.update_timer.timeout.connect(self.update_connection_count)
-        self.update_timer.start(1000)  # Update every second
-
-    def new_websocket_connection(self):
-        """Create a new WebSocket connection window"""
-        self.ws_window_counter += 1
-        window = ConnectionWindow(f"WebSocket Connection #{self.ws_window_counter}")
-        self.mdi_area.addSubWindow(window)
-        window.show()
-        self.logger.info(f"Created new WebSocket connection window #{self.ws_window_counter}")
-
-    def open_conda_manager(self):
-        """Open the Conda environment manager dialog"""
-        dialog = QDialog(self)
-        dialog.setWindowTitle("Conda Environment Manager")
-        dialog.setModal(True)
-        dialog.setMinimumSize(800, 600)
-
-        layout = QVBoxLayout()
-        conda_widget = CondaManagerWidget(dialog)
-        layout.addWidget(conda_widget)
-        dialog.setLayout(layout)
-
-        dialog.exec()
-        self.logger.info("Opened Conda environment manager")
-
-    def configure_vscode(self):
-        """Open VS Code configuration dialog"""
-        dialog = VSCodeConfigDialog(self)
-        dialog.exec()
-        self.logger.info("Opened VS Code configuration dialog")
-
-    def show_about(self):
-        """Show about dialog"""
-        from PySide6.QtWidgets import QMessageBox
-        QMessageBox.about(
-            self,
-            "About PyDev-Toolkit",
-            "PyDev-Toolkit v1.0.0\n\n"
-            "A comprehensive Python development toolkit featuring:\n"
-            "• WebSocket debugging with pluggable views\n"
-            "• Conda environment management\n"
-            "• VS Code workspace configuration\n\n"
-            "Built with Python and PySide6"
-        )
-
-    def update_connection_count(self):
-        """Update the connection count in status bar"""
-        count = len([w for w in self.mdi_area.subWindowList()
-                    if isinstance(w.widget(), ConnectionWindow)])
-        self.connection_label.setText(f"Connections: {count}")
-
-    def closeEvent(self, event):
-        """Handle application close event"""
-        # Close all sub-windows properly
-        self.mdi_area.closeAllSubWindows()
-        event.accept()
-        self.logger.info("Application closed")
-
-
-def main():
-    """Main entry point for the application"""
-    app = QApplication(sys.argv)
-    app.setApplicationName("PyDev-Toolkit")
-    app.setOrganizationName("PyDev")
-
-    # Set application style
-    app.setStyle("Fusion")
-
-    window = MainWindow()
-    window.show()
-
-    sys.exit(app.exec())
-
-
-if __name__ == "__main__":
-    main()
+```json
+{
+  "compilerOptions": {
+    "target": "ES2020",
+    "useDefineForClassFields": true,
+    "lib": ["ES2020", "DOM", "DOM.Iterable"],
+    "module": "ESNext",
+    "skipLibCheck": true,
+    "moduleResolution": "bundler",
+    "allowImportingTsExtensions": true,
+    "resolveJsonModule": true,
+    "isolatedModules": true,
+    "noEmit": true,
+    "jsx": "react-jsx",
+    "strict": true,
+    "noUnusedLocals": true,
+    "noUnusedParameters": true,
+    "noFallthroughCasesInSwitch": true,
+    "baseUrl": ".",
+    "paths": {
+      "@/*": ["src/*"]
+    }
+  },
+  "include": ["src"],
+  "references": [{ "path": "./tsconfig.node.json" }]
+}
 ```
 
-## 第二部分：通用 WebSocket 调试器
+### src/main.tsx
 
-### websocket_tool/**init**.py
+```tsx
+import React from "react";
+import ReactDOM from "react-dom/client";
+import { ConfigProvider, theme } from "antd";
+import App from "./App";
+import "./styles/global.css";
 
-```python
-"""WebSocket debugging tool module"""
+ReactDOM.createRoot(document.getElementById("root") as HTMLElement).render(
+  <React.StrictMode>
+    <ConfigProvider
+      theme={{
+        algorithm: theme.darkAlgorithm,
+        token: {
+          colorPrimary: "#1890ff",
+          borderRadius: 4,
+        },
+      }}
+    >
+      <App />
+    </ConfigProvider>
+  </React.StrictMode>
+);
 ```
 
-### websocket_tool/signal_bridge.py
+### src/App.tsx
 
-```python
-from PySide6.QtCore import QObject, Signal
+```tsx
+import React, { useState } from "react";
+import { Layout } from "antd";
+import { useHotkeys } from "react-hotkeys-hook";
+import TabManager from "./components/TabManager";
+import CommandPalette from "./components/CommandPalette";
+import { useTabStore } from "./stores/tabStore";
+import "./styles/App.css";
 
+const { Header, Content } = Layout;
 
-class SignalBridge(QObject):
-    """Signal bridge for cross-thread communication"""
+const App: React.FC = () => {
+  const [commandPaletteVisible, setCommandPaletteVisible] = useState(false);
+  const { addTab } = useTabStore();
 
-    # Connection signals
-    connected = Signal()
-    disconnected = Signal()
-    connection_error = Signal(str)
+  // Global hotkeys
+  useHotkeys("ctrl+shift+p, cmd+shift+p", () => {
+    setCommandPaletteVisible(true);
+  });
 
-    # Message signals
-    message_received = Signal(str, str)  # timestamp, message
-    message_sent = Signal(str, str)  # timestamp, message
+  useHotkeys("ctrl+t, cmd+t", () => {
+    addTab("websocket", "New WebSocket Connection");
+  });
 
-    # Status signals
-    status_update = Signal(str)
+  const handleCommand = (command: string) => {
+    switch (command) {
+      case "websocket.new":
+        addTab("websocket", "New WebSocket Connection");
+        break;
+      case "conda.open":
+        addTab("conda", "Conda Manager");
+        break;
+      case "vscode.configure":
+        addTab("vscode", "VS Code Configuration");
+        break;
+    }
+    setCommandPaletteVisible(false);
+  };
 
-    def __init__(self):
-        super().__init__()
+  return (
+    <Layout className="app-layout">
+      <Header className="app-header">
+        <div className="app-title">DevDeck</div>
+      </Header>
+      <Content className="app-content">
+        <TabManager />
+      </Content>
+      <CommandPalette
+        visible={commandPaletteVisible}
+        onClose={() => setCommandPaletteVisible(false)}
+        onCommand={handleCommand}
+      />
+    </Layout>
+  );
+};
+
+export default App;
 ```
 
-### websocket_tool/websocket_thread.py
+### src/stores/tabStore.ts
 
-```python
-import json
-import asyncio
-import websockets
-from datetime import datetime
-from PySide6.QtCore import QThread, QObject
-from websocket_tool.signal_bridge import SignalBridge
+```typescript
+import { create } from "zustand";
+import { v4 as uuidv4 } from "uuid";
 
+export type TabType = "websocket" | "conda" | "vscode" | "settings";
 
-class WebSocketThread(QThread):
-    """Background thread for WebSocket communication"""
+export interface Tab {
+  id: string;
+  type: TabType;
+  title: string;
+  data?: any;
+}
 
-    def __init__(self, signal_bridge: SignalBridge):
-        super().__init__()
-        self.signal_bridge = signal_bridge
-        self.websocket = None
-        self.uri = None
-        self.running = False
-        self.loop = None
+interface TabStore {
+  tabs: Tab[];
+  activeTabId: string | null;
+  addTab: (type: TabType, title?: string) => void;
+  removeTab: (id: string) => void;
+  setActiveTab: (id: string) => void;
+  updateTab: (id: string, updates: Partial<Tab>) => void;
+  reorderTabs: (startIndex: number, endIndex: number) => void;
+}
 
-    def set_uri(self, uri: str):
-        """Set the WebSocket URI"""
-        self.uri = uri
+export const useTabStore = create<TabStore>((set) => ({
+  tabs: [],
+  activeTabId: null,
 
-    async def connect_websocket(self):
-        """Establish WebSocket connection"""
-        try:
-            self.signal_bridge.status_update.emit(f"Connecting to {self.uri}...")
-            self.websocket = await websockets.connect(self.uri)
-            self.signal_bridge.connected.emit()
-            self.signal_bridge.status_update.emit(f"Connected to {self.uri}")
+  addTab: (type, title) => {
+    const id = uuidv4();
+    const newTab: Tab = {
+      id,
+      type,
+      title: title || `New ${type}`,
+    };
 
-            # Start receiving messages
-            await self.receive_messages()
+    set((state) => ({
+      tabs: [...state.tabs, newTab],
+      activeTabId: id,
+    }));
+  },
 
-        except Exception as e:
-            self.signal_bridge.connection_error.emit(str(e))
-            self.signal_bridge.status_update.emit(f"Connection failed: {e}")
+  removeTab: (id) => {
+    set((state) => {
+      const newTabs = state.tabs.filter((tab) => tab.id !== id);
+      let newActiveId = state.activeTabId;
 
-    async def receive_messages(self):
-        """Receive messages from WebSocket"""
-        try:
-            async for message in self.websocket:
-                timestamp = datetime.now().strftime("%H:%M:%S.%f")[:-3]
-                self.signal_bridge.message_received.emit(timestamp, message)
-        except websockets.exceptions.ConnectionClosed:
-            self.signal_bridge.disconnected.emit()
-            self.signal_bridge.status_update.emit("Connection closed")
-        except Exception as e:
-            self.signal_bridge.connection_error.emit(str(e))
+      if (state.activeTabId === id) {
+        const removedIndex = state.tabs.findIndex((tab) => tab.id === id);
+        if (newTabs.length > 0) {
+          newActiveId = newTabs[Math.min(removedIndex, newTabs.length - 1)].id;
+        } else {
+          newActiveId = null;
+        }
+      }
 
-    async def send_message_async(self, message: str):
-        """Send a message through WebSocket"""
-        if self.websocket and not self.websocket.closed:
-            try:
-                await self.websocket.send(message)
-                timestamp = datetime.now().strftime("%H:%M:%S.%f")[:-3]
-                self.signal_bridge.message_sent.emit(timestamp, message)
-            except Exception as e:
-                self.signal_bridge.connection_error.emit(str(e))
+      return {
+        tabs: newTabs,
+        activeTabId: newActiveId,
+      };
+    });
+  },
 
-    def send_message(self, message: str):
-        """Queue a message to be sent"""
-        if self.loop and self.websocket:
-            asyncio.run_coroutine_threadsafe(
-                self.send_message_async(message),
-                self.loop
-            )
+  setActiveTab: (id) => {
+    set({ activeTabId: id });
+  },
 
-    async def disconnect_websocket(self):
-        """Close WebSocket connection"""
-        if self.websocket:
-            await self.websocket.close()
-            self.websocket = None
-            self.signal_bridge.disconnected.emit()
-            self.signal_bridge.status_update.emit("Disconnected")
+  updateTab: (id, updates) => {
+    set((state) => ({
+      tabs: state.tabs.map((tab) =>
+        tab.id === id ? { ...tab, ...updates } : tab
+      ),
+    }));
+  },
 
-    def disconnect(self):
-        """Request disconnection"""
-        if self.loop and self.websocket:
-            asyncio.run_coroutine_threadsafe(
-                self.disconnect_websocket(),
-                self.loop
-            )
-        self.running = False
-
-    def run(self):
-        """Run the WebSocket event loop"""
-        self.running = True
-        self.loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(self.loop)
-
-        if self.uri:
-            self.loop.run_until_complete(self.connect_websocket())
-
-        self.loop.close()
+  reorderTabs: (startIndex, endIndex) => {
+    set((state) => {
+      const newTabs = [...state.tabs];
+      const [removed] = newTabs.splice(startIndex, 1);
+      newTabs.splice(endIndex, 0, removed);
+      return { tabs: newTabs };
+    });
+  },
+}));
 ```
 
-### websocket_tool/views/base_view.py
+### src/components/TabManager/index.tsx
 
-```python
-from abc import ABC, abstractmethod
-from PySide6.QtWidgets import QWidget
+```tsx
+import React from "react";
+import { Tabs, Button, Empty } from "antd";
+import { PlusOutlined, CloseOutlined } from "@ant-design/icons";
+import { DndContext, closestCenter, DragEndEvent } from "@dnd-kit/core";
+import {
+  SortableContext,
+  horizontalListSortingStrategy,
+  arrayMove,
+} from "@dnd-kit/sortable";
+import { useTabStore } from "@/stores/tabStore";
+import WebSocketDebugger from "../WebSocketDebugger";
+import CondaManager from "../CondaManager";
+import VSCodeConfig from "../VSCodeConfig";
+import "./style.css";
 
+const TabManager: React.FC = () => {
+  const { tabs, activeTabId, setActiveTab, removeTab, addTab, reorderTabs } =
+    useTabStore();
 
-class BaseView(QWidget, ABC):
-    """Base class for pluggable view widgets"""
+  const renderTabContent = (tab: any) => {
+    switch (tab.type) {
+      case "websocket":
+        return <WebSocketDebugger tabId={tab.id} />;
+      case "conda":
+        return <CondaManager tabId={tab.id} />;
+      case "vscode":
+        return <VSCodeConfig tabId={tab.id} />;
+      default:
+        return <Empty description="Unknown tab type" />;
+    }
+  };
 
-    def __init__(self, parent=None):
-        super().__init__(parent)
-        self.setup_ui()
+  const handleDragEnd = (event: DragEndEvent) => {
+    const { active, over } = event;
+    if (active.id !== over?.id) {
+      const oldIndex = tabs.findIndex((tab) => tab.id === active.id);
+      const newIndex = tabs.findIndex((tab) => tab.id === over?.id);
+      reorderTabs(oldIndex, newIndex);
+    }
+  };
 
-    @abstractmethod
-    def setup_ui(self):
-        """Setup the view's UI"""
-        pass
+  const handleEdit = (
+    targetKey: React.MouseEvent | React.KeyboardEvent | string,
+    action: "add" | "remove"
+  ) => {
+    if (action === "add") {
+      addTab("websocket");
+    } else if (action === "remove" && typeof targetKey === "string") {
+      removeTab(targetKey);
+    }
+  };
 
-    @abstractmethod
-    def on_message_received(self, timestamp: str, message: str):
-        """Handle received message"""
-        pass
+  if (tabs.length === 0) {
+    return (
+      <div className="empty-state">
+        <Empty
+          description={
+            <span>
+              No tabs open. Press <kbd>Ctrl+T</kbd> to create a new WebSocket
+              connection
+              <br />
+              or <kbd>Ctrl+Shift+P</kbd> to open command palette
+            </span>
+          }
+        >
+          <Button
+            type="primary"
+            icon={<PlusOutlined />}
+            onClick={() => addTab("websocket")}
+          >
+            New WebSocket Connection
+          </Button>
+        </Empty>
+      </div>
+    );
+  }
 
-    @abstractmethod
-    def on_message_sent(self, timestamp: str, message: str):
-        """Handle sent message"""
-        pass
+  return (
+    <Tabs
+      type="editable-card"
+      activeKey={activeTabId || undefined}
+      onChange={setActiveTab}
+      onEdit={handleEdit}
+      className="tab-manager"
+      items={tabs.map((tab) => ({
+        key: tab.id,
+        label: <span className="tab-label">{tab.title}</span>,
+        children: <div className="tab-content">{renderTabContent(tab)}</div>,
+      }))}
+    />
+  );
+};
 
-    @abstractmethod
-    def get_view_name(self) -> str:
-        """Return the display name of this view"""
-        pass
-
-    def clear(self):
-        """Clear the view contents"""
-        pass
+export default TabManager;
 ```
 
-### websocket_tool/views/json_tree_view.py
+### src/components/WebSocketDebugger/index.tsx
 
-```python
-import json
-from PySide6.QtWidgets import (
-    QVBoxLayout, QTreeWidget, QTreeWidgetItem,
-    QHeaderView, QLabel
-)
-from PySide6.QtCore import Qt
-from PySide6.QtGui import QFont, QColor
-from websocket_tool.views.base_view import BaseView
+```tsx
+import React, { useState, useEffect, useRef } from "react";
+import {
+  Row,
+  Col,
+  Input,
+  Button,
+  Select,
+  Card,
+  Space,
+  Typography,
+  Divider,
+} from "antd";
+import {
+  SendOutlined,
+  LinkOutlined,
+  DisconnectOutlined,
+} from "@ant-design/icons";
+import { invoke } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
+import JsonTreeView from "@/views/JsonTreeView";
+import RawLogView from "@/views/RawLogView";
+import MessageTimeline from "./MessageTimeline";
+import "./style.css";
 
+const { TextArea } = Input;
+const { Text } = Typography;
 
-class JsonTreeView(BaseView):
-    """Tree view for JSON message display"""
+interface WebSocketDebuggerProps {
+  tabId: string;
+}
 
-    def setup_ui(self):
-        layout = QVBoxLayout()
-        layout.setContentsMargins(0, 0, 0, 0)
+interface Message {
+  id: string;
+  type: "sent" | "received";
+  content: string;
+  timestamp: string;
+}
 
-        # Title
-        self.title_label = QLabel("JSON Tree View")
-        self.title_label.setStyleSheet("font-weight: bold; padding: 5px;")
-        layout.addWidget(self.title_label)
+const WebSocketDebugger: React.FC<WebSocketDebuggerProps> = ({ tabId }) => {
+  const [url, setUrl] = useState("ws://localhost:8080");
+  const [connected, setConnected] = useState(false);
+  const [connecting, setConnecting] = useState(false);
+  const [message, setMessage] = useState("");
+  const [messages, setMessages] = useState<Message[]>([]);
+  const [selectedView, setSelectedView] = useState("json");
+  const connectionIdRef = useRef<string | null>(null);
 
-        # Tree widget
-        self.tree = QTreeWidget()
-        self.tree.setHeaderLabels(["Key", "Value", "Type"])
-        self.tree.header().setStretchLastSection(False)
-        self.tree.header().setSectionResizeMode(0, QHeaderView.ResizeToContents)
-        self.tree.header().setSectionResizeMode(1, QHeaderView.Stretch)
-        self.tree.header().setSectionResizeMode(2, QHeaderView.ResizeToContents)
+  useEffect(() => {
+    // Listen for WebSocket events
+    const unlistenMessage = listen(`ws-message-${tabId}`, (event) => {
+      const { type, content, timestamp } = event.payload as any;
+      setMessages((prev) => [
+        ...prev,
+        {
+          id: Date.now().toString(),
+          type,
+          content,
+          timestamp,
+        },
+      ]);
+    });
 
-        layout.addWidget(self.tree)
-        self.setLayout(layout)
+    const unlistenStatus = listen(`ws-status-${tabId}`, (event) => {
+      const { status } = event.payload as any;
+      if (status === "connected") {
+        setConnected(true);
+        setConnecting(false);
+      } else if (status === "disconnected") {
+        setConnected(false);
+        setConnecting(false);
+      }
+    });
 
-    def on_message_received(self, timestamp: str, message: str):
-        """Display received message in tree format"""
-        self._add_message_to_tree(f"[{timestamp}] Received", message, QColor(0, 128, 0))
+    return () => {
+      unlistenMessage.then((fn) => fn());
+      unlistenStatus.then((fn) => fn());
+    };
+  }, [tabId]);
 
-    def on_message_sent(self, timestamp: str, message: str):
-        """Display sent message in tree format"""
-        self._add_message_to_tree(f"[{timestamp}] Sent", message, QColor(0, 0, 255))
+  const handleConnect = async () => {
+    if (connected) {
+      await invoke("websocket_disconnect", {
+        connectionId: connectionIdRef.current,
+      });
+      setConnected(false);
+      connectionIdRef.current = null;
+    } else {
+      setConnecting(true);
+      try {
+        const connectionId = await invoke<string>("websocket_connect", {
+          url,
+          tabId,
+        });
+        connectionIdRef.current = connectionId;
+      } catch (error) {
+        console.error("Connection failed:", error);
+        setConnecting(false);
+      }
+    }
+  };
 
-    def _add_message_to_tree(self, title: str, message: str, color: QColor):
-        """Add a message to the tree widget"""
-        root = QTreeWidgetItem(self.tree)
-        root.setText(0, title)
-        root.setForeground(0, color)
+  const handleSend = async () => {
+    if (!connected || !message.trim()) return;
 
-        # Make title bold
-        font = QFont()
-        font.setBold(True)
-        root.setFont(0, font)
+    await invoke("websocket_send", {
+      connectionId: connectionIdRef.current,
+      message,
+    });
+    setMessage("");
+  };
 
-        try:
-            data = json.loads(message)
-            self._add_json_to_tree(data, root)
-            root.setExpanded(True)
-        except json.JSONDecodeError:
-            # If not JSON, show as plain text
-            item = QTreeWidgetItem(root)
-            item.setText(0, "Raw Message")
-            item.setText(1, message)
-            item.setText(2, "string")
+  const renderView = () => {
+    switch (selectedView) {
+      case "json":
+        return <JsonTreeView messages={messages} />;
+      case "raw":
+        return <RawLogView messages={messages} />;
+      default:
+        return null;
+    }
+  };
 
-    def _add_json_to_tree(self, data, parent):
-        """Recursively add JSON data to tree"""
-        if isinstance(data, dict):
-            for key, value in data.items():
-                item = QTreeWidgetItem(parent)
-                item.setText(0, str(key))
+  return (
+    <div className="websocket-debugger">
+      <Row gutter={16} className="full-height">
+        <Col span={12} className="left-panel">
+          <Card title="Connection" size="small" className="connection-card">
+            <Space.Compact style={{ width: "100%" }}>
+              <Input
+                placeholder="ws://localhost:8080"
+                value={url}
+                onChange={(e) => setUrl(e.target.value)}
+                disabled={connected}
+                prefix={<LinkOutlined />}
+              />
+              <Button
+                type={connected ? "default" : "primary"}
+                onClick={handleConnect}
+                loading={connecting}
+                danger={connected}
+                icon={connected ? <DisconnectOutlined /> : <LinkOutlined />}
+              >
+                {connected ? "Disconnect" : "Connect"}
+              </Button>
+            </Space.Compact>
+            <div className="connection-status">
+              Status:{" "}
+              <Text type={connected ? "success" : "secondary"}>
+                {connected ? "Connected" : "Disconnected"}
+              </Text>
+            </div>
+          </Card>
 
-                if isinstance(value, (dict, list)):
-                    item.setText(2, type(value).__name__)
-                    self._add_json_to_tree(value, item)
-                else:
-                    item.setText(1, str(value))
-                    item.setText(2, type(value).__name__)
+          <Card title="Message" size="small" className="message-card">
+            <TextArea
+              rows={6}
+              value={message}
+              onChange={(e) => setMessage(e.target.value)}
+              placeholder="Enter message to send (JSON supported)"
+              disabled={!connected}
+            />
+            <Button
+              type="primary"
+              icon={<SendOutlined />}
+              onClick={handleSend}
+              disabled={!connected || !message.trim()}
+              style={{ marginTop: 8 }}
+              block
+            >
+              Send Message
+            </Button>
+          </Card>
 
-        elif isinstance(data, list):
-            for i, value in enumerate(data):
-                item = QTreeWidgetItem(parent)
-                item.setText(0, f"[{i}]")
+          <Card title="Timeline" size="small" className="timeline-card">
+            <MessageTimeline messages={messages} />
+          </Card>
+        </Col>
 
-                if isinstance(value, (dict, list)):
-                    item.setText(2, type(value).__name__)
-                    self._add_json_to_tree(value, item)
-                else:
-                    item.setText(1, str(value))
-                    item.setText(2, type(value).__name__)
+        <Col span={12} className="right-panel">
+          <Card
+            title="View"
+            size="small"
+            className="view-card"
+            extra={
+              <Select
+                value={selectedView}
+                onChange={setSelectedView}
+                options={[
+                  { label: "JSON Tree", value: "json" },
+                  { label: "Raw Log", value: "raw" },
+                ]}
+                style={{ width: 120 }}
+              />
+            }
+          >
+            {renderView()}
+          </Card>
+        </Col>
+      </Row>
+    </div>
+  );
+};
 
-    def get_view_name(self) -> str:
-        return "JSON Tree View"
-
-    def clear(self):
-        """Clear all items from the tree"""
-        self.tree.clear()
+export default WebSocketDebugger;
 ```
 
-### websocket_tool/views/raw_log_view.py
+### src/components/CommandPalette/index.tsx
 
-```python
-from PySide6.QtWidgets import QVBoxLayout, QTextEdit, QLabel
-from PySide6.QtGui import QTextCharFormat, QColor, QFont
-from websocket_tool.views.base_view import BaseView
+```tsx
+import React, { useState, useEffect } from "react";
+import { Modal, Input, List, Typography } from "antd";
+import {
+  ApiOutlined,
+  CodeOutlined,
+  SettingOutlined,
+  CloudServerOutlined,
+} from "@ant-design/icons";
+import "./style.css";
 
+const { Search } = Input;
+const { Text } = Typography;
 
-class RawLogView(BaseView):
-    """Raw text log view for messages"""
+interface Command {
+  id: string;
+  title: string;
+  description: string;
+  icon: React.ReactNode;
+  shortcut?: string;
+}
 
-    def setup_ui(self):
-        layout = QVBoxLayout()
-        layout.setContentsMargins(0, 0, 0, 0)
+interface CommandPaletteProps {
+  visible: boolean;
+  onClose: () => void;
+  onCommand: (commandId: string) => void;
+}
 
-        # Title
-        self.title_label = QLabel("Raw Log View")
-        self.title_label.setStyleSheet("font-weight: bold; padding: 5px;")
-        layout.addWidget(self.title_label)
+const commands: Command[] = [
+  {
+    id: "websocket.new",
+    title: "New WebSocket Connection",
+    description: "Create a new WebSocket debugging session",
+    icon: <ApiOutlined />,
+    shortcut: "Ctrl+T",
+  },
+  {
+    id: "conda.open",
+    title: "Open Conda Manager",
+    description: "Manage Conda environments",
+    icon: <CloudServerOutlined />,
+  },
+  {
+    id: "vscode.configure",
+    title: "Configure VS Code Workspace",
+    description: "Set up VS Code with Conda environment",
+    icon: <CodeOutlined />,
+  },
+  {
+    id: "settings.open",
+    title: "Open Settings",
+    description: "Configure application settings",
+    icon: <SettingOutlined />,
+  },
+];
 
-        # Text area
-        self.log_area = QTextEdit()
-        self.log_area.setReadOnly(True)
-        self.log_area.setFont(QFont("Consolas", 9))
-        layout.addWidget(self.log_area)
+const CommandPalette: React.FC<CommandPaletteProps> = ({
+  visible,
+  onClose,
+  onCommand,
+}) => {
+  const [search, setSearch] = useState("");
+  const [filteredCommands, setFilteredCommands] = useState(commands);
 
-        self.setLayout(layout)
+  useEffect(() => {
+    if (visible) {
+      setSearch("");
+      setFilteredCommands(commands);
+    }
+  }, [visible]);
 
-    def on_message_received(self, timestamp: str, message: str):
-        """Display received message"""
-        cursor = self.log_area.textCursor()
-        cursor.movePosition(cursor.End)
+  const handleSearch = (value: string) => {
+    setSearch(value);
+    const filtered = commands.filter(
+      (cmd) =>
+        cmd.title.toLowerCase().includes(value.toLowerCase()) ||
+        cmd.description.toLowerCase().includes(value.toLowerCase())
+    );
+    setFilteredCommands(filtered);
+  };
 
-        # Format for received messages (green)
-        format_received = QTextCharFormat()
-        format_received.setForeground(QColor(0, 128, 0))
-        format_received.setFontWeight(QFont.Bold)
+  const handleSelect = (commandId: string) => {
+    onCommand(commandId);
+    onClose();
+  };
 
-        cursor.insertText(f"[{timestamp}] ← RECEIVED\n", format_received)
+  return (
+    <Modal
+      open={visible}
+      onCancel={onClose}
+      footer={null}
+      closable={false}
+      width={600}
+      className="command-palette"
+    >
+      <Search
+        placeholder="Type a command..."
+        value={search}
+        onChange={(e) => handleSearch(e.target.value)}
+        autoFocus
+        size="large"
+      />
+      <List
+        className="command-list"
+        dataSource={filteredCommands}
+        renderItem={(item) => (
+          <List.Item
+            onClick={() => handleSelect(item.id)}
+            className="command-item"
+          >
+            <List.Item.Meta
+              avatar={<div className="command-icon">{item.icon}</div>}
+              title={item.title}
+              description={item.description}
+            />
+            {item.shortcut && (
+              <Text type="secondary" keyboard>
+                {item.shortcut}
+              </Text>
+            )}
+          </List.Item>
+        )}
+      />
+    </Modal>
+  );
+};
 
-        # Message content
-        format_content = QTextCharFormat()
-        cursor.insertText(f"{message}\n\n", format_content)
-
-        # Scroll to bottom
-        self.log_area.ensureCursorVisible()
-
-    def on_message_sent(self, timestamp: str, message: str):
-        """Display sent message"""
-        cursor = self.log_area.textCursor()
-        cursor.movePosition(cursor.End)
-
-        # Format for sent messages (blue)
-        format_sent = QTextCharFormat()
-        format_sent.setForeground(QColor(0, 0, 255))
-        format_sent.setFontWeight(QFont.Bold)
-
-        cursor.insertText(f"[{timestamp}] → SENT\n", format_sent)
-
-        # Message content
-        format_content = QTextCharFormat()
-        cursor.insertText(f"{message}\n\n", format_content)
-
-        # Scroll to bottom
-        self.log_area.ensureCursorVisible()
-
-    def get_view_name(self) -> str:
-        return "Raw Log View"
-
-    def clear(self):
-        """Clear the log"""
-        self.log_area.clear()
+export default CommandPalette;
 ```
 
-### websocket_tool/connection_window.py
+## 第二部分：Rust 后端 (Tauri)
 
-```python
-from PySide6.QtWidgets import (
-    QMdiSubWindow, QWidget, QVBoxLayout, QHBoxLayout,
-    QSplitter, QLineEdit, QPushButton, QTextEdit,
-    QToolBar, QComboBox, QLabel, QGroupBox
-)
-from PySide6.QtCore import Qt, Signal
-from PySide6.QtGui import QAction, QTextCharFormat, QColor, QFont
-from websocket_tool.websocket_thread import WebSocketThread
-from websocket_tool.signal_bridge import SignalBridge
-from websocket_tool.views.json_tree_view import JsonTreeView
-from websocket_tool.views.raw_log_view import RawLogView
+### src-tauri/Cargo.toml
 
+```toml
+[package]
+name = "devdeck"
+version = "1.0.0"
+description = "A modern development toolkit"
+authors = ["DevDeck Team"]
+edition = "2021"
 
-class ConnectionWindow(QMdiSubWindow):
-    """WebSocket connection window with pluggable views"""
+[build-dependencies]
+tauri-build = { version = "2.0.0", features = [] }
 
-    def __init__(self, title="WebSocket Connection"):
-        super().__init__()
-        self.setWindowTitle(title)
-        self.setMinimumSize(1000, 600)
+[dependencies]
+tauri = { version = "2.0.0", features = ["shell-open", "process-command-api"] }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+tokio = { version = "1", features = ["full"] }
+tokio-tungstenite = "0.20"
+futures-util = "0.3"
+uuid = { version = "1.6", features = ["v4", "serde"] }
+anyhow = "1.0"
+which = "5.0"
+reqwest = { version = "0.11", features = ["stream"] }
+zip = "0.6"
+tempfile = "3.8"
 
-        # Create main widget
-        self.main_widget = QWidget()
-        self.setWidget(self.main_widget)
-
-        # Initialize components
-        self.signal_bridge = SignalBridge()
-        self.ws_thread = WebSocketThread(self.signal_bridge)
-        self.current_view = None
-        self.views = {}
-
-        # Setup UI
-        self.setup_ui()
-        self.register_default_views()
-        self.connect_signals()
-
-    def setup_ui(self):
-        """Setup the main UI layout"""
-        main_layout = QVBoxLayout()
-        main_layout.setContentsMargins(5, 5, 5, 5)
-
-        # Create toolbar
-        self.toolbar = QToolBar()
-        self.setup_toolbar()
-        main_layout.addWidget(self.toolbar)
-
-        # Create splitter for left and right panels
-        self.splitter = QSplitter(Qt.Horizontal)
-
-        # Left panel - Connection and messaging
-        left_panel = self.create_left_panel()
-        self.splitter.addWidget(left_panel)
-
-        # Right panel - View container
-        self.view_container = QWidget()
-        self.view_layout = QVBoxLayout()
-        self.view_layout.setContentsMargins(0, 0, 0, 0)
-        self.view_container.setLayout(self.view_layout)
-        self.splitter.addWidget(self.view_container)
-
-        # Set initial splitter sizes (40% left, 60% right)
-        self.splitter.setSizes([400, 600])
-
-        main_layout.addWidget(self.splitter)
-        self.main_widget.setLayout(main_layout)
-
-    def setup_toolbar(self):
-        """Setup the toolbar with view selection"""
-        # View selection
-        view_label = QLabel("View: ")
-        self.toolbar.addWidget(view_label)
-
-        self.view_combo = QComboBox()
-        self.view_combo.currentTextChanged.connect(self.switch_view)
-        self.toolbar.addWidget(self.view_combo)
-
-        self.toolbar.addSeparator()
-
-        # Clear action
-        clear_action = QAction("Clear View", self)
-        clear_action.triggered.connect(self.clear_current_view)
-        self.toolbar.addAction(clear_action)
-
-    def create_left_panel(self):
-        """Create the left panel with connection and messaging controls"""
-        panel = QWidget()
-        layout = QVBoxLayout()
-
-        # Connection group
-        connection_group = QGroupBox("Connection")
-        connection_layout = QVBoxLayout()
-
-        # URI input
-        uri_layout = QHBoxLayout()
-        self.uri_input = QLineEdit()
-        self.uri_input.setPlaceholderText("ws://localhost:8000 or wss://...")
-        self.uri_input.setText("ws://localhost:8000")
-        uri_layout.addWidget(self.uri_input)
-
-        self.connect_btn = QPushButton("Connect")
-        self.connect_btn.clicked.connect(self.toggle_connection)
-        uri_layout.addWidget(self.connect_btn)
-
-        connection_layout.addLayout(uri_layout)
-
-        # Status label
-        self.status_label = QLabel("Disconnected")
-        self.status_label.setStyleSheet("color: red; font-weight: bold;")
-        connection_layout.addWidget(self.status_label)
-
-        connection_group.setLayout(connection_layout)
-        layout.addWidget(connection_group)
-
-        # Message group
-        message_group = QGroupBox("Message")
-        message_layout = QVBoxLayout()
-
-        # Message input
-        self.message_input = QTextEdit()
-        self.message_input.setPlaceholderText("Enter message to send (JSON supported)")
-        self.message_input.setMaximumHeight(150)
-        message_layout.addWidget(self.message_input)
-
-        # Send button
-        self.send_btn = QPushButton("Send Message")
-        self.send_btn.setEnabled(False)
-        self.send_btn.clicked.connect(self.send_message)
-        message_layout.addWidget(self.send_btn)
-
-        message_group.setLayout(message_layout)
-        layout.addWidget(message_group)
-
-        # Timeline group
-        timeline_group = QGroupBox("Message Timeline")
-        timeline_layout = QVBoxLayout()
-
-        self.timeline = QTextEdit()
-        self.timeline.setReadOnly(True)
-        self.timeline.setFont(QFont("Consolas", 9))
-        timeline_layout.addWidget(self.timeline)
-
-        timeline_group.setLayout(timeline_layout)
-        layout.addWidget(timeline_group)
-
-        panel.setLayout(layout)
-        return panel
-
-    def register_default_views(self):
-        """Register default view plugins"""
-        self.register_view(JsonTreeView())
-        self.register_view(RawLogView())
-
-        # Set JSON Tree as default
-        self.switch_view("JSON Tree View")
-
-    def register_view(self, view):
-        """Register a new view plugin"""
-        name = view.get_view_name()
-        self.views[name] = view
-        self.view_combo.addItem(name)
-
-        # Connect view to signals
-        self.signal_bridge.message_received.connect(view.on_message_received)
-        self.signal_bridge.message_sent.connect(view.on_message_sent)
-
-    def switch_view(self, view_name):
-        """Switch to a different view"""
-        if view_name not in self.views:
-            return
-
-        # Remove current view
-        if self.current_view:
-            self.view_layout.removeWidget(self.current_view)
-            self.current_view.setParent(None)
-
-        # Add new view
-        self.current_view = self.views[view_name]
-        self.view_layout.addWidget(self.current_view)
-
-    def clear_current_view(self):
-        """Clear the current view"""
-        if self.current_view:
-            self.current_view.clear()
-
-    def connect_signals(self):
-        """Connect all signals"""
-        self.signal_bridge.connected.connect(self.on_connected)
-        self.signal_bridge.disconnected.connect(self.on_disconnected)
-        self.signal_bridge.connection_error.connect(self.on_connection_error)
-        self.signal_bridge.message_received.connect(self.on_message_received)
-        self.signal_bridge.message_sent.connect(self.on_message_sent)
-        self.signal_bridge.status_update.connect(self.on_status_update)
-
-    def toggle_connection(self):
-        """Toggle WebSocket connection"""
-        if self.connect_btn.text() == "Connect":
-            uri = self.uri_input.text().strip()
-            if not uri:
-                return
-
-            self.ws_thread.set_uri(uri)
-            self.ws_thread.start()
-            self.connect_btn.setText("Connecting...")
-            self.connect_btn.setEnabled(False)
-        else:
-            self.ws_thread.disconnect()
-            self.connect_btn.setText("Disconnecting...")
-            self.connect_btn.setEnabled(False)
-
-    def send_message(self):
-        """Send a message through WebSocket"""
-        message = self.message_input.toPlainText().strip()
-        if message:
-            self.ws_thread.send_message(message)
-            self.message_input.clear()
-
-    def on_connected(self):
-        """Handle connection established"""
-        self.connect_btn.setText("Disconnect")
-        self.connect_btn.setEnabled(True)
-        self.send_btn.setEnabled(True)
-        self.status_label.setText("Connected")
-        self.status_label.setStyleSheet("color: green; font-weight: bold;")
-        self.uri_input.setEnabled(False)
-
-    def on_disconnected(self):
-        """Handle disconnection"""
-        self.connect_btn.setText("Connect")
-        self.connect_btn.setEnabled(True)
-        self.send_btn.setEnabled(False)
-        self.status_label.setText("Disconnected")
-        self.status_label.setStyleSheet("color: red; font-weight: bold;")
-        self.uri_input.setEnabled(True)
-
-    def on_connection_error(self, error):
-        """Handle connection error"""
-        self.on_disconnected()
-        self.add_timeline_message(f"ERROR: {error}", QColor(255, 0, 0))
-
-    def on_message_received(self, timestamp, message):
-        """Handle received message"""
-        self.add_timeline_message(f"[{timestamp}] ← RECEIVED: {message}", QColor(0, 128, 0))
-
-    def on_message_sent(self, timestamp, message):
-        """Handle sent message"""
-        self.add_timeline_message(f"[{timestamp}] → SENT: {message}", QColor(0, 0, 255))
-
-    def on_status_update(self, status):
-        """Handle status update"""
-        self.add_timeline_message(f"STATUS: {status}", QColor(128, 128, 128))
-
-    def add_timeline_message(self, message, color):
-        """Add a message to the timeline"""
-        cursor = self.timeline.textCursor()
-        cursor.movePosition(cursor.End)
-
-        format = QTextCharFormat()
-        format.setForeground(color)
-
-        cursor.insertText(f"{message}\n", format)
-        self.timeline.ensureCursorVisible()
-
-    def closeEvent(self, event):
-        """Handle window close"""
-        if self.ws_thread.isRunning():
-            self.ws_thread.disconnect()
-            self.ws_thread.wait()
-        event.accept()
+[features]
+default = ["custom-protocol"]
+custom-protocol = ["tauri/custom-protocol"]
 ```
 
-## 第三部分：Conda 环境管理器
+### src-tauri/src/main.rs
 
-### conda_manager/**init**.py
+```rust
+#![cfg_attr(
+    all(not(debug_assertions), target_os = "windows"),
+    windows_subsystem = "windows"
+)]
 
-```python
-"""Conda environment manager module"""
+mod conda;
+mod vscode;
+mod websocket;
+
+use tauri::{Manager, State};
+use std::sync::Arc;
+use tokio::sync::Mutex;
+
+#[derive(Default)]
+struct AppState {
+    websocket_manager: Arc<Mutex<websocket::WebSocketManager>>,
+    conda_service: Arc<Mutex<conda::CondaService>>,
+}
+
+#[tauri::command]
+async fn websocket_connect(
+    url: String,
+    tab_id: String,
+    state: State<'_, AppState>,
+    app: tauri::AppHandle,
+) -> Result<String, String> {
+    let mut manager = state.websocket_manager.lock().await;
+    manager.connect(url, tab_id, app).await
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+async fn websocket_disconnect(
+    connection_id: String,
+    state: State<'_, AppState>,
+) -> Result<(), String> {
+    let mut manager = state.websocket_manager.lock().await;
+    manager.disconnect(&connection_id).await
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+async fn websocket_send(
+    connection_id: String,
+    message: String,
+    state: State<'_, AppState>,
+) -> Result<(), String> {
+    let manager = state.websocket_manager.lock().await;
+    manager.send_message(&connection_id, message).await
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+async fn conda_detect(
+    state: State<'_, AppState>,
+) -> Result<Option<String>, String> {
+    let service = state.conda_service.lock().await;
+    service.detect_conda().await
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+async fn conda_list_environments(
+    state: State<'_, AppState>,
+) -> Result<Vec<conda::Environment>, String> {
+    let service = state.conda_service.lock().await;
+    service.list_environments().await
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+async fn conda_create_environment(
+    name: String,
+    python_version: Option<String>,
+    state: State<'_, AppState>,
+    app: tauri::AppHandle,
+) -> Result<(), String> {
+    let service = state.conda_service.lock().await;
+    service.create_environment(name, python_version, app).await
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+async fn conda_install_miniconda(
+    install_path: String,
+    state: State<'_, AppState>,
+    app: tauri::AppHandle,
+) -> Result<(), String> {
+    let mut service = state.conda_service.lock().await;
+    service.install_miniconda(install_path, app).await
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+async fn vscode_open_with_env(
+    project_path: String,
+    env_name: String,
+    state: State<'_, AppState>,
+) -> Result<(), String> {
+    let conda_service = state.conda_service.lock().await;
+    vscode::open_project_with_env(project_path, env_name, &*conda_service).await
+        .map_err(|e| e.to_string())
+}
+
+fn main() {
+    tauri::Builder::default()
+        .manage(AppState::default())
+        .invoke_handler(tauri::generate_handler![
+            websocket_connect,
+            websocket_disconnect,
+            websocket_send,
+            conda_detect,
+            conda_list_environments,
+            conda_create_environment,
+            conda_install_miniconda,
+            vscode_open_with_env,
+        ])
+        .run(tauri::generate_context!())
+        .expect("error while running tauri application");
+}
 ```
 
-### conda_manager/conda_service.py
-
-```python
-import os
-import sys
-import json
-import subprocess
-import platform
-import requests
-from pathlib import Path
-from PySide6.QtCore import QThread, Signal, QObject
-
-
-class CondaService(QThread):
-    """Background service for Conda operations"""
-
-    # Signals
-    conda_found = Signal(str)  # conda path
-    conda_not_found = Signal()
-    operation_started = Signal(str)  # operation name
-    operation_progress = Signal(str)  # progress message
-    operation_completed = Signal(str)  # result message
-    operation_failed = Signal(str)  # error message
-    environment_list_updated = Signal(list)  # list of environments
-    download_progress = Signal(int, int)  # current, total bytes
-
-    def __init__(self):
-        super().__init__()
-        self.conda_path = None
-        self.operation = None
-        self.operation_args = None
-
-    def run(self):
-        """Run the requested operation"""
-        if self.operation == "detect":
-            self.detect_conda()
-        elif self.operation == "install":
-            self.install_miniconda(self.operation_args)
-        elif self.operation == "list":
-            self.list_environments()
-        elif self.operation == "create":
-            self.create_environment(**self.operation_args)
-        elif self.operation == "delete":
-            self.delete_environment(self.operation_args)
-        elif self.operation == "update":
-            self.update_environment(self.operation_args)
-
-    def start_operation(self, operation, args=None):
-        """Start an operation in the background thread"""
-        self.operation = operation
-        self.operation_args = args
-        self.start()
-
-    def detect_conda(self):
-        """Detect Conda installation on the system"""
-        self.operation_started.emit("Detecting Conda installation...")
-
-        # Common conda executable names
-        conda_names = ["conda", "conda.exe", "conda.bat"]
-
-        # Common installation paths
-        common_paths = []
-
-        if platform.system() == "Windows":
-            common_paths.extend([
-                Path.home() / "Miniconda3",
-                Path.home() / "Anaconda3",
-                Path("C:/ProgramData/Miniconda3"),
-                Path("C:/ProgramData/Anaconda3"),
-                Path("C:/Miniconda3"),
-                Path("C:/Anaconda3"),
-            ])
-        else:
-            common_paths.extend([
-                Path.home() / "miniconda3",
-                Path.home() / "anaconda3",
-                Path("/opt/miniconda3"),
-                Path("/opt/anaconda3"),
-                Path("/usr/local/miniconda3"),
-                Path("/usr/local/anaconda3"),
-            ])
-
-        # Check PATH first
-        for name in conda_names:
-            try:
-                result = subprocess.run(
-                    [name, "--version"],
-                    capture_output=True,
-                    text=True,
-                    timeout=5
-                )
-                if result.returncode == 0:
-                    self.conda_path = name
-                    self.conda_found.emit(name)
-                    self.operation_completed.emit(f"Conda found in PATH: {name}")
-                    return
-            except:
-                pass
-
-        # Check common installation paths
-        for path in common_paths:
-            for subdir in ["", "Scripts", "bin", "condabin"]:
-                conda_dir = path / subdir if subdir else path
-                for name in conda_names:
-                    conda_exe = conda_dir / name
-                    if conda_exe.exists():
-                        try:
-                            result = subprocess.run(
-                                [str(conda_exe), "--version"],
-                                capture_output=True,
-                                text=True,
-                                timeout=5
-                            )
-                            if result.returncode == 0:
-                                self.conda_path = str(conda_exe)
-                                self.conda_found.emit(str(conda_exe))
-                                self.operation_completed.emit(f"Conda found at: {conda_exe}")
-                                return
-                        except:
-                            pass
-
-        self.conda_not_found.emit()
-        self.operation_completed.emit("Conda not found on system")
-
-    def install_miniconda(self, install_path):
-        """Download and install Miniconda silently"""
-        self.operation_started.emit("Installing Miniconda...")
-
-        try:
-            # Determine installer URL based on platform
-            system = platform.system()
-            machine = platform.machine()
-
-            if system == "Windows":
-                if machine.endswith("64"):
-                    installer_url = "https://repo.anaconda.com/miniconda/Miniconda3-latest-Windows-x86_64.exe"
-                    installer_name = "Miniconda3-installer.exe"
-                else:
-                    installer_url = "https://repo.anaconda.com/miniconda/Miniconda3-latest-Windows-x86.exe"
-                    installer_name = "Miniconda3-installer.exe"
-            elif system == "Darwin":  # macOS
-                installer_url = "https://repo.anaconda.com/miniconda/Miniconda3-latest-MacOSX-x86_64.sh"
-                installer_name = "Miniconda3-installer.sh"
-            else:  # Linux
-                installer_url = "https://repo.anaconda.com/miniconda/Miniconda3-latest-Linux-x86_64.sh"
-                installer_name = "Miniconda3-installer.sh"
-
-            # Download installer
-            self.operation_progress.emit(f"Downloading from {installer_url}")
-            installer_path = Path.home() / installer_name
-
-            response = requests.get(installer_url, stream=True)
-            total_size = int(response.headers.get('content-length', 0))
-            downloaded = 0
-
-            with open(installer_path, 'wb') as f:
-                for chunk in response.iter_content(chunk_size=8192):
-                    if chunk:
-                        f.write(chunk)
-                        downloaded += len(chunk)
-                        self.download_progress.emit(downloaded, total_size)
-
-            self.operation_progress.emit("Download complete. Installing...")
-
-            # Run installer
-            if system == "Windows":
-                # Silent install on Windows
-                cmd = [
-                    str(installer_path),
-                    "/S",
-                    f"/D={install_path}"
-                ]
-            else:
-                # Silent install on Unix-like systems
-                cmd = [
-                    "bash",
-                    str(installer_path),
-                    "-b",
-                    "-p",
-                    install_path
-                ]
-
-            process = subprocess.Popen(
-                cmd,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.STDOUT,
-                text=True
-            )
-
-            for line in process.stdout:
-                self.operation_progress.emit(line.strip())
-
-            process.wait()
-
-            if process.returncode == 0:
-                self.operation_completed.emit(f"Miniconda installed successfully at {install_path}")
-                # Update conda path
-                if system == "Windows":
-                    self.conda_path = str(Path(install_path) / "Scripts" / "conda.exe")
-                else:
-                    self.conda_path = str(Path(install_path) / "bin" / "conda")
-                self.conda_found.emit(self.conda_path)
-            else:
-                self.operation_failed.emit("Installation failed")
-
-            # Clean up installer
-            installer_path.unlink()
-
-        except Exception as e:
-            self.operation_failed.emit(str(e))
-
-    def list_environments(self):
-        """List all Conda environments"""
-        if not self.conda_path:
-            self.detect_conda()
-            if not self.conda_path:
-                self.operation_failed.emit("Conda not found")
-                return
-
-        self.operation_started.emit("Listing environments...")
-
-        try:
-            result = subprocess.run(
-                [self.conda_path, "env", "list", "--json"],
-                capture_output=True,
-                text=True
-            )
-
-            if result.returncode == 0:
-                data = json.loads(result.stdout)
-                environments = []
-                for env_path in data.get("envs", []):
-                    env_name = Path(env_path).name
-                    if env_name == "miniconda3" or env_name == "anaconda3":
-                        env_name = "base"
-                    environments.append({
-                        "name": env_name,
-                        "path": env_path
-                    })
-                self.environment_list_updated.emit(environments)
-                self.operation_completed.emit(f"Found {len(environments)} environments")
-            else:
-                self.operation_failed.emit(result.stderr)
-
-        except Exception as e:
-            self.operation_failed.emit(str(e))
-
-    def list_environments_sync(self):
-        """Synchronously list environments (for use in main thread)"""
-        if not self.conda_path:
-            self.detect_conda()
-            if not self.conda_path:
-                return []
-
-        try:
-            result = subprocess.run(
-                [self.conda_path, "env", "list", "--json"],
-                capture_output=True,
-                text=True,
-                timeout=10
-            )
-
-            if result.returncode == 0:
-                data = json.loads(result.stdout)
-                environments = []
-                for env_path in data.get("envs", []):
-                    env_name = Path(env_path).name
-                    if env_name == "miniconda3" or env_name == "anaconda3":
-                        env_name = "base"
-                    environments.append({
-                        "name": env_name,
-                        "path": env_path
-                    })
-                return environments
-        except:
-            pass
-
-        return []
-
-    def create_environment(self, name=None, yaml_file=None):
-        """Create a new Conda environment"""
-        if not self.conda_path:
-            self.operation_failed.emit("Conda not found")
-            return
-
-        self.operation_started.emit(f"Creating environment...")
-
-        try:
-            if yaml_file:
-                # Create from YAML file
-                cmd = [self.conda_path, "env", "create", "-f", yaml_file]
-            else:
-                # Create empty environment with Python
-                cmd = [self.conda_path, "create", "-n", name, "python", "-y"]
-
-            process = subprocess.Popen(
-                cmd,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.STDOUT,
-                text=True
-            )
-
-            for line in process.stdout:
-                self.operation_progress.emit(line.strip())
-
-            process.wait()
-
-            if process.returncode == 0:
-                self.operation_completed.emit("Environment created successfully")
-                self.list_environments()  # Refresh list
-            else:
-                self.operation_failed.emit("Failed to create environment")
-
-        except Exception as e:
-            self.operation_failed.emit(str(e))
-
-    def delete_environment(self, env_name):
-        """Delete a Conda environment"""
-        if not self.conda_path:
-            self.operation_failed.emit("Conda not found")
-            return
-
-        self.operation_started.emit(f"Deleting environment: {env_name}")
-
-        try:
-            cmd = [self.conda_path, "env", "remove", "-n", env_name, "-y"]
-
-            process = subprocess.Popen(
-                cmd,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.STDOUT,
-                text=True
-            )
-
-            for line in process.stdout:
-                self.operation_progress.emit(line.strip())
-
-            process.wait()
-
-            if process.returncode == 0:
-                self.operation_completed.emit(f"Environment '{env_name}' deleted")
-                self.list_environments()  # Refresh list
-            else:
-                self.operation_failed.emit("Failed to delete environment")
-
-        except Exception as e:
-            self.operation_failed.emit(str(e))
-
-    def update_environment(self, env_name):
-        """Update all packages in a Conda environment"""
-        if not self.conda_path:
-            self.operation_failed.emit("Conda not found")
-            return
-
-        self.operation_started.emit(f"Updating environment: {env_name}")
-
-        try:
-            cmd = [self.conda_path, "update", "-n", env_name, "--all", "-y"]
-
-            process = subprocess.Popen(
-                cmd,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.STDOUT,
-                text=True
-            )
-
-            for line in process.stdout:
-                self.operation_progress.emit(line.strip())
-
-            process.wait()
-
-            if process.returncode == 0:
-                self.operation_completed.emit(f"Environment '{env_name}' updated")
-            else:
-                self.operation_failed.emit("Failed to update environment")
-
-        except Exception as e:
-            self.operation_failed.emit(str(e))
-
-    def get_python_path(self, env_name):
-        """Get Python interpreter path for an environment"""
-        if not self.conda_path:
-            return None
-
-        try:
-            # Get environment info
-            result = subprocess.run(
-                [self.conda_path, "info", "--envs", "--json"],
-                capture_output=True,
-                text=True
-            )
-
-            if result.returncode == 0:
-                data = json.loads(result.stdout)
-                for env_path in data.get("envs", []):
-                    if Path(env_path).name == env_name or (env_name == "base" and "miniconda3" in env_path):
-                        if platform.system() == "Windows":
-                            python_path = Path(env_path) / "python.exe"
-                        else:
-                            python_path = Path(env_path) / "bin" / "python"
-                        if python_path.exists():
-                            return str(python_path)
-        except:
-            pass
-
-        return None
-```
-
-### conda_manager/conda_widget.py
-
-```python
-from PySide6.QtWidgets import (
-    QWidget, QVBoxLayout, QHBoxLayout, QPushButton,
-    QListWidget, QTextEdit, QLabel, QFileDialog,
-    QMessageBox, QGroupBox, QProgressBar, QInputDialog
-)
-from PySide6.QtCore import Qt, Signal
-from conda_manager.conda_service import CondaService
-
-
-class CondaManagerWidget(QWidget):
-    """UI widget for Conda environment management"""
-
-    def __init__(self, parent=None):
-        super().__init__(parent)
-        self.conda_service = CondaService()
-        self.setup_ui()
-        self.connect_signals()
-
-        # Start by detecting Conda
-        self.conda_service.start_operation("detect")
-
-    def setup_ui(self):
-        """Setup the UI components"""
-        layout = QVBoxLayout()
-
-        # Status section
-        status_group = QGroupBox("Conda Status")
-        status_layout = QVBoxLayout()
-
-        self.status_label = QLabel("Detecting Conda installation...")
-        self.status_label.setStyleSheet("font-weight: bold;")
-        status_layout.addWidget(self.status_label)
-
-        self.conda_path_label = QLabel("Path: Not detected")
-        status_layout.addWidget(self.conda_path_label)
-
-        self.install_btn = QPushButton("Install Miniconda")
-        self.install_btn.setEnabled(False)
-        self.install_btn.clicked.connect(self.install_miniconda)
-        status_layout.addWidget(self.install_btn)
-
-        status_group.setLayout(status_layout)
-        layout.addWidget(status_group)
-
-        # Environments section
-        env_group = QGroupBox("Environments")
-        env_layout = QVBoxLayout()
-
-        # Environment list
-        self.env_list = QListWidget()
-        env_layout.addWidget(self.env_list)
-
-        # Environment actions
-        actions_layout = QHBoxLayout()
-
-        self.create_btn = QPushButton("Create New")
-        self.create_btn.clicked.connect(self.create_environment)
-        actions_layout.addWidget(self.create_btn)
-
-        self.create_from_file_btn = QPushButton("Create from file...")
-        self.create_from_file_btn.clicked.connect(self.create_from_file)
-        actions_layout.addWidget(self.create_from_file_btn)
-
-        self.update_btn = QPushButton("Update Selected")
-        self.update_btn.clicked.connect(self.update_environment)
-        actions_layout.addWidget(self.update_btn)
-
-        self.delete_btn = QPushButton("Delete Selected")
-        self.delete_btn.clicked.connect(self.delete_environment)
-        actions_layout.addWidget(self.delete_btn)
-
-        env_layout.addLayout(actions_layout)
-        env_group.setLayout(env_layout)
-        layout.addWidget(env_group)
-
-        # Progress section
-        progress_group = QGroupBox("Operation Progress")
-        progress_layout = QVBoxLayout()
-
-        self.progress_bar = QProgressBar()
-        self.progress_bar.setVisible(False)
-        progress_layout.addWidget(self.progress_bar)
-
-        self.log_output = QTextEdit()
-        self.log_output.setReadOnly(True)
-        self.log_output.setMaximumHeight(200)
-        progress_layout.addWidget(self.log_output)
-
-        progress_group.setLayout(progress_layout)
-        layout.addWidget(progress_group)
-
-        self.setLayout(layout)
-
-        # Initially disable environment actions
-        self.set_environment_actions_enabled(False)
-
-    def connect_signals(self):
-        """Connect service signals to UI handlers"""
-        self.conda_service.conda_found.connect(self.on_conda_found)
-        self.conda_service.conda_not_found.connect(self.on_conda_not_found)
-        self.conda_service.operation_started.connect(self.on_operation_started)
-        self.conda_service.operation_progress.connect(self.on_operation_progress)
-        self.conda_service.operation_completed.connect(self.on_operation_completed)
-        self.conda_service.operation_failed.connect(self.on_operation_failed)
-        self.conda_service.environment_list_updated.connect(self.on_environments_updated)
-        self.conda_service.download_progress.connect(self.on_download_progress)
-
-    def on_conda_found(self, conda_path):
-        """Handle Conda found signal"""
-        self.status_label.setText("Conda detected ✓")
-        self.status_label.setStyleSheet("color: green; font-weight: bold;")
-        self.conda_path_label.setText(f"Path: {conda_path}")
-        self.install_btn.setEnabled(False)
-        self.set_environment_actions_enabled(True)
-
-        # Load environments
-        self.conda_service.start_operation("list")
-
-    def on_conda_not_found(self):
-        """Handle Conda not found signal"""
-        self.status_label.setText("Conda not found ✗")
-        self.status_label.setStyleSheet("color: red; font-weight: bold;")
-        self.conda_path_label.setText("Path: Not detected")
-        self.install_btn.setEnabled(True)
-        self.set_environment_actions_enabled(False)
-
-    def on_operation_started(self, operation):
-        """Handle operation started signal"""
-        self.log_output.append(f"\n>>> {operation}")
-        self.set_environment_actions_enabled(False)
-
-    def on_operation_progress(self, message):
-        """Handle operation progress signal"""
-        self.log_output.append(message)
-        # Auto-scroll to bottom
-        scrollbar = self.log_output.verticalScrollBar()
-        scrollbar.setValue(scrollbar.maximum())
-
-    def on_operation_completed(self, message):
-        """Handle operation completed signal"""
-        self.log_output.append(f"✓ {message}")
-        self.set_environment_actions_enabled(True)
-        self.progress_bar.setVisible(False)
-
-    def on_operation_failed(self, error):
-        """Handle operation failed signal"""
-        self.log_output.append(f"✗ Error: {error}")
-        self.set_environment_actions_enabled(True)
-        self.progress_bar.setVisible(False)
-        QMessageBox.critical(self, "Operation Failed", error)
-
-    def on_environments_updated(self, environments):
-        """Handle environments list update"""
-        self.env_list.clear()
-        for env in environments:
-            self.env_list.addItem(f"{env['name']} ({env['path']})")
-
-    def on_download_progress(self, current, total):
-        """Handle download progress signal"""
-        if total > 0:
-            self.progress_bar.setVisible(True)
-            self.progress_bar.setMaximum(total)
-            self.progress_bar.setValue(current)
-            percent = (current / total) * 100
-            self.progress_bar.setFormat(f"Downloading: {percent:.1f}%")
-
-    def set_environment_actions_enabled(self, enabled):
-        """Enable/disable environment action buttons"""
-        self.create_btn.setEnabled(enabled)
-        self.create_from_file_btn.setEnabled(enabled)
-        self.update_btn.setEnabled(enabled)
-        self.delete_btn.setEnabled(enabled)
-        self.env_list.setEnabled(enabled)
-
-    def install_miniconda(self):
-        """Install Miniconda"""
-        install_path = QFileDialog.getExistingDirectory(
-            self,
-            "Select Installation Directory",
-            str(Path.home())
-        )
-
-        if install_path:
-            self.conda_service.start_operation("install", install_path)
-
-    def create_environment(self):
-        """Create a new environment"""
-        name, ok = QInputDialog.getText(
-            self,
-            "Create Environment",
-            "Environment name:"
-        )
-
-        if ok and name:
-            self.conda_service.start_operation("create", {"name": name})
-
-    def create_from_file(self):
-        """Create environment from YAML file"""
-        file_path, _ = QFileDialog.getOpenFileName(
-            self,
-            "Select environment.yml file",
-            "",
-            "YAML files (*.yml *.yaml)"
-        )
-
-        if file_path:
-            self.conda_service.start_operation("create", {"yaml_file": file_path})
-
-    def update_environment(self):
-        """Update selected environment"""
-        current_item = self.env_list.currentItem()
-        if current_item:
-            env_name = current_item.text().split(" (")[0]
-
-            reply = QMessageBox.question(
-                self,
-                "Update Environment",
-                f"Update all packages in '{env_name}'?",
-                QMessageBox.Yes | QMessageBox.No
-            )
-
-            if reply == QMessageBox.Yes:
-                self.conda_service.start_operation("update", env_name)
-
-    def delete_environment(self):
-        """Delete selected environment"""
-        current_item = self.env_list.currentItem()
-        if current_item:
-            env_name = current_item.text().split(" (")[0]
-
-            if env_name == "base":
-                QMessageBox.warning(
-                    self,
-                    "Cannot Delete",
-                    "Cannot delete the base environment"
-                )
-                return
-
-            reply = QMessageBox.question(
-                self,
-                "Delete Environment",
-                f"Delete environment '{env_name}'?",
-                QMessageBox.Yes | QMessageBox.No
-            )
-
-            if reply == QMessageBox.Yes:
-                self.conda_service.start_operation("delete", env_name)
-```
-
-## 第四部分：VS Code 集成
-
-### vscode_integration/**init**.py
-
-```python
-"""VS Code integration module"""
-```
-
-### vscode_integration/manager.py
-
-```python
-import json
-import subprocess
-import platform
-from pathlib import Path
-from conda_manager.conda_service import CondaService
-
-
-class VSCodeManager:
-    """Manager for VS Code workspace configuration and integration"""
-
-    def __init__(self):
-        self.conda_service = CondaService()
-
-    def open_project_with_env(self, project_path: str, env_name: str):
-        """Open a project in VS Code with specified Conda environment"""
-
-        # Get Python interpreter path for the environment
-        python_path = self.conda_service.get_python_path(env_name)
-
-        if not python_path:
-            raise ValueError(f"Could not find Python interpreter for environment: {env_name}")
-
-        # Create workspace configuration
-        workspace_config = {
-            "folders": [
-                {
-                    "path": "."
+### src-tauri/src/websocket/mod.rs
+
+```rust
+use anyhow::Result;
+use futures_util::{SinkExt, StreamExt};
+use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
+use tauri::{AppHandle, Manager};
+use tokio::net::TcpStream;
+use tokio_tungstenite::{connect_async, MaybeTlsStream, WebSocketStream};
+use uuid::Uuid;
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct WsMessage {
+    #[serde(rename = "type")]
+    msg_type: String,
+    content: String,
+    timestamp: String,
+}
+
+pub struct WebSocketConnection {
+    id: String,
+    tab_id: String,
+    tx: tokio::sync::mpsc::Sender<String>,
+}
+
+pub struct WebSocketManager {
+    connections: HashMap<String, WebSocketConnection>,
+}
+
+impl Default for WebSocketManager {
+    fn default() -> Self {
+        Self {
+            connections: HashMap::new(),
+        }
+    }
+}
+
+impl WebSocketManager {
+    pub async fn connect(
+        &mut self,
+        url: String,
+        tab_id: String,
+        app: AppHandle,
+    ) -> Result<String> {
+        let connection_id = Uuid::new_v4().to_string();
+        let (tx, mut rx) = tokio::sync::mpsc::channel::<String>(100);
+
+        // Create connection
+        let connection = WebSocketConnection {
+            id: connection_id.clone(),
+            tab_id: tab_id.clone(),
+            tx,
+        };
+
+        self.connections.insert(connection_id.clone(), connection);
+
+        // Connect to WebSocket in background task
+        let app_clone = app.clone();
+        let tab_id_clone = tab_id.clone();
+        let connection_id_clone = connection_id.clone();
+
+        tokio::spawn(async move {
+            match connect_async(&url).await {
+                Ok((ws_stream, _)) => {
+                    // Send connected status
+                    app_clone.emit(&format!("ws-status-{}", tab_id_clone),
+                        serde_json::json!({ "status": "connected" })).unwrap();
+
+                    let (mut write, mut read) = ws_stream.split();
+
+                    // Handle incoming messages
+                    let app_read = app_clone.clone();
+                    let tab_id_read = tab_id_clone.clone();
+                    tokio::spawn(async move {
+                        while let Some(msg) = read.next().await {
+                            if let Ok(msg) = msg {
+                                if let Ok(text) = msg.to_text() {
+                                    let message = WsMessage {
+                                        msg_type: "received".to_string(),
+                                        content: text.to_string(),
+                                        timestamp: chrono::Local::now().format("%H:%M:%S%.3f").to_string(),
+                                    };
+                                    app_read.emit(&format!("ws-message-{}", tab_id_read), message).unwrap();
+                                }
+                            }
+                        }
+                    });
+
+                    // Handle outgoing messages
+                    while let Some(msg) = rx.recv().await {
+                        if write.send(tokio_tungstenite::tungstenite::Message::Text(msg.clone())).await.is_ok() {
+                            let message = WsMessage {
+                                msg_type: "sent".to_string(),
+                                content: msg,
+                                timestamp: chrono::Local::now().format("%H:%M:%S%.3f").to_string(),
+                            };
+                            app_clone.emit(&format!("ws-message-{}", tab_id_clone), message).unwrap();
+                        }
+                    }
                 }
-            ],
-            "settings": {
-                "python.defaultInterpreterPath": python_path,
-                "python.terminal.activateEnvironment": True,
-                "python.terminal.activateEnvInCurrentTerminal": True,
-                "python.condaPath": self.conda_service.conda_path or "conda",
+                Err(e) => {
+                    app_clone.emit(&format!("ws-status-{}", tab_id_clone),
+                        serde_json::json!({ "status": "error", "message": e.to_string() })).unwrap();
+                }
+            }
+        });
+
+        Ok(connection_id)
+    }
+
+    pub async fn disconnect(&mut self, connection_id: &str) -> Result<()> {
+        self.connections.remove(connection_id);
+        Ok(())
+    }
+
+    pub async fn send_message(&self, connection_id: &str, message: String) -> Result<()> {
+        if let Some(connection) = self.connections.get(connection_id) {
+            connection.tx.send(message).await?;
+        }
+        Ok(())
+    }
+}
+```
+
+### src-tauri/src/conda/mod.rs
+
+```rust
+use anyhow::Result;
+use serde::{Deserialize, Serialize};
+use std::path::PathBuf;
+use std::process::Command;
+use tauri::{AppHandle, Manager};
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct Environment {
+    pub name: String,
+    pub path: String,
+    pub python_version: Option<String>,
+}
+
+pub struct CondaService {
+    conda_path: Option<PathBuf>,
+}
+
+impl Default for CondaService {
+    fn default() -> Self {
+        Self { conda_path: None }
+    }
+}
+
+impl CondaService {
+    pub async fn detect_conda(&self) -> Result<Option<String>> {
+        // Try to find conda in PATH
+        if let Ok(path) = which::which("conda") {
+            return Ok(Some(path.to_string_lossy().to_string()));
+        }
+
+        // Check common installation paths
+        let common_paths = if cfg!(windows) {
+            vec![
+                dirs::home_dir().unwrap().join("Miniconda3"),
+                dirs::home_dir().unwrap().join("Anaconda3"),
+                PathBuf::from("C:\\ProgramData\\Miniconda3"),
+                PathBuf::from("C:\\ProgramData\\Anaconda3"),
+            ]
+        } else {
+            vec![
+                dirs::home_dir().unwrap().join("miniconda3"),
+                dirs::home_dir().unwrap().join("anaconda3"),
+                PathBuf::from("/opt/miniconda3"),
+                PathBuf::from("/opt/anaconda3"),
+            ]
+        };
+
+        for path in common_paths {
+            let conda_bin = if cfg!(windows) {
+                path.join("Scripts").join("conda.exe")
+            } else {
+                path.join("bin").join("conda")
+            };
+
+            if conda_bin.exists() {
+                return Ok(Some(conda_bin.to_string_lossy().to_string()));
             }
         }
 
-        # Write workspace file
-        project_path = Path(project_path)
-        workspace_file = project_path / f"{project_path.name}.code-workspace"
+        Ok(None)
+    }
 
-        with open(workspace_file, 'w') as f:
-            json.dump(workspace_config, f, indent=4)
+    pub async fn list_environments(&self) -> Result<Vec<Environment>> {
+        let conda_path = self.conda_path.as_ref()
+            .or(self.detect_conda().await?.as_ref().map(|s| PathBuf::from(s).as_ref()))
+            .ok_or_else(|| anyhow::anyhow!("Conda not found"))?;
 
-        # Open VS Code with the workspace
-        self.open_vscode(str(workspace_file))
+        let output = Command::new(conda_path)
+            .args(&["env", "list", "--json"])
+            .output()?;
 
-        return workspace_file
+        let json: serde_json::Value = serde_json::from_slice(&output.stdout)?;
+        let envs = json["envs"].as_array()
+            .ok_or_else(|| anyhow::anyhow!("Invalid conda output"))?;
 
-    def open_vscode(self, workspace_path: str):
-        """Open VS Code with the specified workspace file"""
+        let mut environments = Vec::new();
+        for env_path in envs {
+            if let Some(path_str) = env_path.as_str() {
+                let path = PathBuf::from(path_str);
+                let name = path.file_name()
+                    .and_then(|n| n.to_str())
+                    .unwrap_or("unknown")
+                    .to_string();
 
-        # Determine VS Code command based on platform
-        if platform.system() == "Windows":
-            vscode_commands = ["code.cmd", "code.exe", "code"]
-        else:
-            vscode_commands = ["code"]
-
-        # Try to launch VS Code
-        for cmd in vscode_commands:
-            try:
-                subprocess.Popen([cmd, workspace_path])
-                return True
-            except FileNotFoundError:
-                continue
-
-        raise RuntimeError("VS Code not found. Please ensure it's installed and in PATH.")
-
-    def create_launch_json(self, project_path: str, env_name: str):
-        """Create a launch.json file for debugging configuration"""
-
-        python_path = self.conda_service.get_python_path(env_name)
-
-        if not python_path:
-            raise ValueError(f"Could not find Python interpreter for environment: {env_name}")
-
-        launch_config = {
-            "version": "0.2.0",
-            "configurations": [
-                {
-                    "name": "Python: Current File",
-                    "type": "python",
-                    "request": "launch",
-                    "program": "${file}",
-                    "console": "integratedTerminal",
-                    "python": python_path
-                },
-                {
-                    "name": "Python: Module",
-                    "type": "python",
-                    "request": "launch",
-                    "module": "enter-your-module-name",
-                    "python": python_path
-                }
-            ]
+                environments.push(Environment {
+                    name,
+                    path: path_str.to_string(),
+                    python_version: None,
+                });
+            }
         }
 
-        # Create .vscode directory if it doesn't exist
-        vscode_dir = Path(project_path) / ".vscode"
-        vscode_dir.mkdir(exist_ok=True)
+        Ok(environments)
+    }
 
-        # Write launch.json
-        launch_file = vscode_dir / "launch.json"
-        with open(launch_file, 'w') as f:
-            json.dump(launch_config, f, indent=4)
+    pub async fn create_environment(
+        &self,
+        name: String,
+        python_version: Option<String>,
+        app: AppHandle,
+    ) -> Result<()> {
+        let conda_path = self.conda_path.as_ref()
+            .ok_or_else(|| anyhow::anyhow!("Conda not found"))?;
 
-        return launch_file
+        let python_spec = python_version.unwrap_or_else(|| "python=3.9".to_string());
+
+        let mut cmd = Command::new(conda_path);
+        cmd.args(&["create", "-n", &name, &python_spec, "-y"]);
+
+        // Stream output to frontend
+        let output = cmd.output()?;
+
+        app.emit("conda-output", String::from_utf8_lossy(&output.stdout).to_string())?;
+
+        if !output.status.success() {
+            return Err(anyhow::anyhow!("Failed to create environment"));
+        }
+
+        Ok(())
+    }
+
+    pub async fn install_miniconda(&mut self, install_path: String, app: AppHandle) -> Result<()> {
+        // Determine installer URL based on platform
+        let installer_url = if cfg!(target_os = "windows") {
+            "https://repo.anaconda.com/miniconda/Miniconda3-latest-Windows-x86_64.exe"
+        } else if cfg!(target_os = "macos") {
+            "https://repo.anaconda.com/miniconda/Miniconda3-latest-MacOSX-x86_64.sh"
+        } else {
+            "https://repo.anaconda.com/miniconda/Miniconda3-latest-Linux-x86_64.sh"
+        };
+
+        // Download installer
+        app.emit("conda-progress", serde_json::json!({
+            "stage": "downloading",
+            "progress": 0
+        }))?;
+
+        let response = reqwest::get(installer_url).await?;
+        let total_size = response.content_length().unwrap_or(0);
+
+        let temp_dir = tempfile::tempdir()?;
+        let installer_path = temp_dir.path().join(if cfg!(windows) {
+            "miniconda_installer.exe"
+        } else {
+            "miniconda_installer.sh"
+        });
+
+        let mut file = tokio::fs::File::create(&installer_path).await?;
+        let mut downloaded = 0u64;
+        let mut stream = response.bytes_stream();
+
+        while let Some(chunk) = stream.next().await {
+            let chunk = chunk?;
+            tokio::io::AsyncWriteExt::write_all(&mut file, &chunk).await?;
+            downloaded += chunk.len() as u64;
+
+            if total_size > 0 {
+                let progress = (downloaded as f64 / total_size as f64 * 100.0) as u32;
+                app.emit("conda-progress", serde_json::json!({
+                    "stage": "downloading",
+                    "progress": progress
+                }))?;
+            }
+        }
+
+        // Run installer
+        app.emit("conda-progress", serde_json::json!({
+            "stage": "installing",
+            "progress": 0
+        }))?;
+
+        let status = if cfg!(windows) {
+            Command::new(&installer_path)
+                .args(&["/S", &format!("/D={}", install_path)])
+                .status()?
+        } else {
+            Command::new("bash")
+                .args(&[installer_path.to_str().unwrap(), "-b", "-p", &install_path])
+                .status()?
+        };
+
+        if !status.success() {
+            return Err(anyhow::anyhow!("Installation failed"));
+        }
+
+        // Update conda path
+        let conda_bin = if cfg!(windows) {
+            PathBuf::from(&install_path).join("Scripts").join("conda.exe")
+        } else {
+            PathBuf::from(&install_path).join("bin").join("conda")
+        };
+
+        self.conda_path = Some(conda_bin);
+
+        app.emit("conda-progress", serde_json::json!({
+            "stage": "complete",
+            "progress": 100
+        }))?;
+
+        Ok(())
+    }
+
+    pub fn get_python_path(&self, env_name: &str) -> Result<String> {
+        let environments = tokio::runtime::Runtime::new()?.block_on(self.list_environments())?;
+
+        for env in environments {
+            if env.name == env_name {
+                let env_path = PathBuf::from(&env.path);
+                let python_path = if cfg!(windows) {
+                    env_path.join("python.exe")
+                } else {
+                    env_path.join("bin").join("python")
+                };
+
+                if python_path.exists() {
+                    return Ok(python_path.to_string_lossy().to_string());
+                }
+            }
+        }
+
+        Err(anyhow::anyhow!("Python interpreter not found for environment"))
+    }
+}
 ```
 
-## 第五部分：工具模块
+### src-tauri/src/vscode/mod.rs
 
-### utils/**init**.py
+```rust
+use anyhow::Result;
+use std::fs;
+use std::path::Path;
+use std::process::Command;
+use serde_json::json;
+use crate::conda::CondaService;
 
-```python
-"""Utility modules"""
+pub async fn open_project_with_env(
+    project_path: String,
+    env_name: String,
+    conda_service: &CondaService,
+) -> Result<()> {
+    // Get Python interpreter path
+    let python_path = conda_service.get_python_path(&env_name)?;
+
+    // Create workspace configuration
+    let workspace_config = json!({
+        "folders": [{
+            "path": "."
+        }],
+        "settings": {
+            "python.defaultInterpreterPath": python_path,
+            "python.terminal.activateEnvironment": true,
+            "python.terminal.activateEnvInCurrentTerminal": true,
+        }
+    });
+
+    // Write workspace file
+    let project_dir = Path::new(&project_path);
+    let workspace_file = project_dir.join(format!(
+        "{}.code-workspace",
+        project_dir.file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or("project")
+    ));
+
+    fs::write(&workspace_file, serde_json::to_string_pretty(&workspace_config)?)?;
+
+    // Open VS Code
+    let code_cmd = if cfg!(windows) { "code.cmd" } else { "code" };
+
+    Command::new(code_cmd)
+        .arg(workspace_file)
+        .spawn()?;
+
+    Ok(())
+}
 ```
 
-### utils/logger.py
-
-```python
-import logging
-import sys
-from pathlib import Path
-
-
-def setup_logger(name, level=logging.INFO):
-    """Setup a logger with console and file handlers"""
-
-    logger = logging.getLogger(name)
-    logger.setLevel(level)
-
-    # Console handler
-    console_handler = logging.StreamHandler(sys.stdout)
-    console_handler.setLevel(level)
-
-    # File handler
-    log_dir = Path.home() / ".pydev-toolkit" / "logs"
-    log_dir.mkdir(parents=True, exist_ok=True)
-
-    file_handler = logging.FileHandler(log_dir / "app.log")
-    file_handler.setLevel(logging.DEBUG)
-
-    # Formatter
-    formatter = logging.Formatter(
-        '%(asctime)s - %(name)s - %(levelname)s - %(message)s'
-    )
-    console_handler.setFormatter(formatter)
-    file_handler.setFormatter(formatter)
-
-    # Add handlers
-    logger.addHandler(console_handler)
-    logger.addHandler(file_handler)
-
-    return logger
-```
-
-## 主入口文件
-
-### main.py
-
-```python
-#!/usr/bin/env python
-"""
-PyDev-Toolkit Main Entry Point
-"""
-
-import sys
-from pathlib import Path
-
-# Add current directory to path
-sys.path.insert(0, str(Path(__file__).parent))
-
-from desktop_app.main import main
-
-if __name__ == "__main__":
-    main()
-```
-
-## 配置文件
-
-### environment.yml
-
-```yaml
-name: pydev-toolkit
-channels:
-  - defaults
-  - conda-forge
-dependencies:
-  - python=3.9
-  - pip
-  - pip:
-      - PySide6>=6.5.0
-      - websockets>=11.0
-      - requests>=2.28.0
-      - pyinstaller>=5.10.0
-```
-
-### requirements.txt
-
-```
-PySide6>=6.5.0
-websockets>=11.0
-requests>=2.28.0
-pyinstaller>=5.10.0
-```
-
-## GitHub Actions 工作流
+## 第三部分：GitHub Actions 工作流
 
 ### .github/workflows/build.yml
 
 ```yaml
-name: Build PyDev-Toolkit
+name: Build and Release DevDeck
 
 on:
   push:
@@ -1835,267 +1318,411 @@ on:
     branches: [main]
   workflow_dispatch:
 
+env:
+  CARGO_TERM_COLOR: always
+
 jobs:
-  build-windows:
-    runs-on: windows-latest
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        platform:
+          - os: ubuntu-latest
+            rust_target: x86_64-unknown-linux-gnu
+            name: linux
+          - os: macos-latest
+            rust_target: x86_64-apple-darwin
+            name: macos
+          - os: macos-latest
+            rust_target: aarch64-apple-darwin
+            name: macos-arm64
+          - os: windows-latest
+            rust_target: x86_64-pc-windows-msvc
+            name: windows
+
+    runs-on: ${{ matrix.platform.os }}
 
     steps:
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@v4
 
-      - name: Setup Miniconda
-        uses: conda-incubator/setup-miniconda@v2
+      - name: Setup Node
+        uses: actions/setup-node@v4
         with:
-          auto-update-conda: true
-          python-version: 3.9
-          activate-environment: pydev-toolkit
-          environment-file: environment.yml
-          auto-activate-base: false
+          node-version: 20
 
-      - name: Install dependencies
-        shell: bash -l {0}
-        run: |
-          conda info
-          conda list
-          pip install -r requirements.txt
-
-      - name: Build with PyInstaller
-        shell: bash -l {0}
-        run: |
-          pyinstaller --name="PyDev-Toolkit" \
-                      --noconsole \
-                      --onefile \
-                      --windowed \
-                      --icon=NONE \
-                      --add-data="websocket_tool;websocket_tool" \
-                      --add-data="conda_manager;conda_manager" \
-                      --add-data="vscode_integration;vscode_integration" \
-                      --add-data="utils;utils" \
-                      --hidden-import="websockets" \
-                      --hidden-import="requests" \
-                      --hidden-import="PySide6.QtCore" \
-                      --hidden-import="PySide6.QtWidgets" \
-                      --hidden-import="PySide6.QtGui" \
-                      main.py
-
-      - name: Test executable
-        shell: bash -l {0}
-        run: |
-          # Basic smoke test - check if exe was created
-          test -f dist/PyDev-Toolkit.exe && echo "Executable created successfully"
-
-      - name: Upload artifact
-        uses: actions/upload-artifact@v3
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
         with:
-          name: PyDev-Toolkit-Windows
-          path: dist/PyDev-Toolkit.exe
+          targets: ${{ matrix.platform.rust_target }}
 
-  build-linux:
-    runs-on: ubuntu-latest
-
-    steps:
-      - uses: actions/checkout@v3
-
-      - name: Setup Miniconda
-        uses: conda-incubator/setup-miniconda@v2
+      - name: Setup Rust cache
+        uses: swatinem/rust-cache@v2
         with:
-          auto-update-conda: true
-          python-version: 3.9
-          activate-environment: pydev-toolkit
-          environment-file: environment.yml
-          auto-activate-base: false
+          workspaces: "./src-tauri -> target"
 
-      - name: Install system dependencies
+      - name: Install dependencies (Ubuntu)
+        if: matrix.platform.os == 'ubuntu-latest'
         run: |
           sudo apt-get update
-          sudo apt-get install -y libxcb-xinerama0 libxcb-icccm4 libxcb-image0 libxcb-keysyms1 libxcb-randr0 libxcb-render-util0 libxcb-xfixes0
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            libappindicator3-dev \
+            librsvg2-dev \
+            patchelf \
+            libssl-dev
 
-      - name: Install Python dependencies
-        shell: bash -l {0}
-        run: |
-          conda info
-          conda list
-          pip install -r requirements.txt
+      - name: Install pnpm
+        run: npm install -g pnpm
 
-      - name: Build with PyInstaller
-        shell: bash -l {0}
-        run: |
-          pyinstaller --name="PyDev-Toolkit" \
-                      --noconsole \
-                      --onefile \
-                      --windowed \
-                      --add-data="websocket_tool:websocket_tool" \
-                      --add-data="conda_manager:conda_manager" \
-                      --add-data="vscode_integration:vscode_integration" \
-                      --add-data="utils:utils" \
-                      --hidden-import="websockets" \
-                      --hidden-import="requests" \
-                      --hidden-import="PySide6.QtCore" \
-                      --hidden-import="PySide6.QtWidgets" \
-                      --hidden-import="PySide6.QtGui" \
-                      main.py
+      - name: Install frontend dependencies
+        run: pnpm install
 
-      - name: Test executable
-        shell: bash -l {0}
-        run: |
-          # Basic smoke test
-          test -f dist/PyDev-Toolkit && echo "Executable created successfully"
-
-      - name: Upload artifact
-        uses: actions/upload-artifact@v3
-        with:
-          name: PyDev-Toolkit-Linux
-          path: dist/PyDev-Toolkit
-
-  build-macos:
-    runs-on: macos-latest
-
-    steps:
-      - uses: actions/checkout@v3
-
-      - name: Setup Miniconda
-        uses: conda-incubator/setup-miniconda@v2
-        with:
-          auto-update-conda: true
-          python-version: 3.9
-          activate-environment: pydev-toolkit
-          environment-file: environment.yml
-          auto-activate-base: false
-
-      - name: Install dependencies
-        shell: bash -l {0}
-        run: |
-          conda info
-          conda list
-          pip install -r requirements.txt
-
-      - name: Build with PyInstaller
-        shell: bash -l {0}
-        run: |
-          pyinstaller --name="PyDev-Toolkit" \
-                      --noconsole \
-                      --onefile \
-                      --windowed \
-                      --osx-bundle-identifier="com.pydev.toolkit" \
-                      --add-data="websocket_tool:websocket_tool" \
-                      --add-data="conda_manager:conda_manager" \
-                      --add-data="vscode_integration:vscode_integration" \
-                      --add-data="utils:utils" \
-                      --hidden-import="websockets" \
-                      --hidden-import="requests" \
-                      --hidden-import="PySide6.QtCore" \
-                      --hidden-import="PySide6.QtWidgets" \
-                      --hidden-import="PySide6.QtGui" \
-                      main.py
-
-      - name: Create DMG (optional)
-        shell: bash -l {0}
-        run: |
-          # Create a simple DMG for distribution
-          hdiutil create -volname "PyDev-Toolkit" -srcfolder dist/ -ov -format UDZO PyDev-Toolkit.dmg
-
-      - name: Upload artifact
-        uses: actions/upload-artifact@v3
-        with:
-          name: PyDev-Toolkit-macOS
-          path: |
-            dist/PyDev-Toolkit.app
-            PyDev-Toolkit.dmg
-
-  create-release:
-    needs: [build-windows, build-linux, build-macos]
-    runs-on: ubuntu-latest
-    if: startsWith(github.ref, 'refs/tags/v')
-
-    steps:
-      - name: Download all artifacts
-        uses: actions/download-artifact@v3
-
-      - name: Create Release
-        uses: softprops/action-gh-release@v1
-        with:
-          files: |
-            PyDev-Toolkit-Windows/PyDev-Toolkit.exe
-            PyDev-Toolkit-Linux/PyDev-Toolkit
-            PyDev-Toolkit-macOS/PyDev-Toolkit.dmg
-          draft: false
-          prerelease: false
+      - name: Build Tauri app
+        uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_KEY_PASSWORD }}
+        with:
+          tagName: ${{ github.ref_name }}
+          releaseName: "DevDeck v__VERSION__"
+          releaseBody: |
+            See the [CHANGELOG](https://github.com/${{ github.repository }}/blob/main/CHANGELOG.md) for details.
+
+            ## Installation
+
+            ### Windows
+            - Download `DevDeck_x64_en-US.msi` for installer
+            - Or download `DevDeck_x64.exe` for portable version
+
+            ### macOS
+            - Download `DevDeck_x64.dmg` for Intel Macs
+            - Download `DevDeck_aarch64.dmg` for Apple Silicon Macs
+
+            ### Linux
+            - Download `DevDeck_amd64.deb` for Debian/Ubuntu
+            - Download `DevDeck_amd64.AppImage` for universal Linux
+          releaseDraft: true
+          prerelease: false
+          args: --target ${{ matrix.platform.rust_target }}
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: devdeck-${{ matrix.platform.name }}
+          path: |
+            src-tauri/target/${{ matrix.platform.rust_target }}/release/bundle/
+          retention-days: 7
+
+  code-sign-windows:
+    needs: build
+    runs-on: windows-latest
+    if: startsWith(github.ref, 'refs/tags/')
+
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: devdeck-windows
+
+      - name: Sign Windows executables
+        env:
+          CERTIFICATE: ${{ secrets.WINDOWS_CERTIFICATE }}
+          CERTIFICATE_PASSWORD: ${{ secrets.WINDOWS_CERTIFICATE_PASSWORD }}
+        run: |
+          # Convert base64 certificate to file
+          echo "$CERTIFICATE" | base64 --decode > cert.pfx
+
+          # Sign all exe and msi files
+          Get-ChildItem -Recurse -Include *.exe,*.msi | ForEach-Object {
+            signtool sign /f cert.pfx /p "$CERTIFICATE_PASSWORD" /fd SHA256 /tr http://timestamp.digicert.com /td SHA256 $_.FullName
+          }
+
+          # Clean up
+          Remove-Item cert.pfx
+
+      - name: Upload signed artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: devdeck-windows-signed
+          path: |
+            **/*.exe
+            **/*.msi
+
+  notarize-macos:
+    needs: build
+    runs-on: macos-latest
+    if: startsWith(github.ref, 'refs/tags/')
+    strategy:
+      matrix:
+        arch: [x64, aarch64]
+
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: devdeck-macos${{ matrix.arch == 'aarch64' && '-arm64' || '' }}
+
+      - name: Notarize macOS app
+        env:
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          # Find the .app bundle
+          APP_PATH=$(find . -name "*.app" -type d | head -n 1)
+
+          # Create a zip for notarization
+          ditto -c -k --keepParent "$APP_PATH" "DevDeck.zip"
+
+          # Submit for notarization
+          xcrun notarytool submit "DevDeck.zip" \
+            --apple-id "$APPLE_ID" \
+            --password "$APPLE_PASSWORD" \
+            --team-id "$APPLE_TEAM_ID" \
+            --wait
+
+          # Staple the notarization
+          xcrun stapler staple "$APP_PATH"
+
+          # Create final DMG
+          create-dmg \
+            --volname "DevDeck" \
+            --window-pos 200 120 \
+            --window-size 600 400 \
+            --icon-size 100 \
+            --icon "DevDeck.app" 175 120 \
+            --hide-extension "DevDeck.app" \
+            --app-drop-link 425 120 \
+            "DevDeck_${{ matrix.arch }}.dmg" \
+            "$APP_PATH"
+
+      - name: Upload notarized artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: devdeck-macos-${{ matrix.arch }}-notarized
+          path: DevDeck_${{ matrix.arch }}.dmg
+
+  create-release:
+    needs: [build, code-sign-windows, notarize-macos]
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/')
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+
+      - name: Create checksums
+        run: |
+          find . -type f \( -name "*.exe" -o -name "*.msi" -o -name "*.dmg" -o -name "*.deb" -o -name "*.AppImage" \) -exec sha256sum {} \; > checksums.txt
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v1
+        with:
+          draft: false
+          prerelease: false
+          generate_release_notes: true
+          files: |
+            **/*.exe
+            **/*.msi
+            **/*.dmg
+            **/*.deb
+            **/*.AppImage
+            checksums.txt
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  auto-update-config:
+    needs: create-release
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/')
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Update auto-update configuration
+        run: |
+          # Generate update manifest
+          cat > update.json <<EOF
+          {
+            "version": "${{ github.ref_name }}",
+            "notes": "See release notes for details",
+            "pub_date": "$(date -u +"%Y-%m-%dT%H:%M:%SZ")",
+            "platforms": {
+              "darwin-x86_64": {
+                "signature": "",
+                "url": "https://github.com/${{ github.repository }}/releases/download/${{ github.ref_name }}/DevDeck_x64.dmg"
+              },
+              "darwin-aarch64": {
+                "signature": "",
+                "url": "https://github.com/${{ github.repository }}/releases/download/${{ github.ref_name }}/DevDeck_aarch64.dmg"
+              },
+              "linux-x86_64": {
+                "signature": "",
+                "url": "https://github.com/${{ github.repository }}/releases/download/${{ github.ref_name }}/DevDeck_amd64.AppImage"
+              },
+              "windows-x86_64": {
+                "signature": "",
+                "url": "https://github.com/${{ github.repository }}/releases/download/${{ github.ref_name }}/DevDeck_x64_en-US.msi"
+              }
+            }
+          }
+          EOF
+
+          # Commit and push update manifest
+          git config user.name github-actions
+          git config user.email github-actions@github.com
+          git add update.json
+          git commit -m "Update auto-update manifest for ${{ github.ref_name }}"
+          git push
 ```
 
-## 使用说明
+### src-tauri/tauri.conf.json
+
+```json
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "app": {
+    "windows": [
+      {
+        "fullscreen": false,
+        "height": 900,
+        "resizable": true,
+        "title": "DevDeck",
+        "width": 1400,
+        "center": true,
+        "decorations": true,
+        "fileDropEnabled": true
+      }
+    ],
+    "security": {
+      "csp": null
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": "all",
+    "identifier": "com.devdeck.app",
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/128x128@2x.png",
+      "icons/icon.icns",
+      "icons/icon.ico"
+    ],
+    "resources": [],
+    "copyright": "© 2024 DevDeck",
+    "category": "DeveloperTool",
+    "shortDescription": "Modern development toolkit",
+    "longDescription": "A comprehensive development platform with WebSocket debugging, Conda management, and VS Code integration.",
+    "linux": {
+      "deb": {
+        "depends": []
+      },
+      "appimage": {
+        "bundleMediaFramework": true
+      }
+    },
+    "macOS": {
+      "frameworks": [],
+      "exceptionDomain": "",
+      "signingIdentity": null,
+      "entitlements": null
+    },
+    "windows": {
+      "certificateThumbprint": null,
+      "digestAlgorithm": "sha256",
+      "timestampUrl": "http://timestamp.digicert.com",
+      "webviewInstallMode": {
+        "type": "downloadBootstrapper"
+      }
+    }
+  },
+  "productName": "DevDeck",
+  "version": "1.0.0",
+  "plugins": {},
+  "build": {
+    "beforeDevCommand": "pnpm dev",
+    "beforeBuildCommand": "pnpm build",
+    "frontendDist": "../dist",
+    "devUrl": "http://localhost:5173"
+  }
+}
+```
+
+## 安装和运行说明
 
 ### 开发环境设置
 
-1. **克隆仓库**
+1. **安装依赖**
 
 ```bash
-git clone https://github.com/yourusername/PyDev-Toolkit.git
-cd PyDev-Toolkit
+# 安装 Rust
+curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
+
+# 安装 Node.js 和 pnpm
+npm install -g pnpm
+
+# 克隆项目
+git clone https://github.com/yourusername/devdeck.git
+cd devdeck
+
+# 安装前端依赖
+pnpm install
+
+# 安装 Tauri CLI
+cargo install tauri-cli
 ```
 
-2. **创建 Conda 环境**
+2. **开发模式运行**
 
 ```bash
-conda env create -f environment.yml
-conda activate pydev-toolkit
+pnpm tauri:dev
 ```
 
-3. **运行应用程序**
+3. **构建生产版本**
 
 ```bash
-python main.py
+pnpm tauri:build
 ```
 
-### 功能使用
+## 特性亮点
 
-1. **WebSocket 调试**
+1. **现代化架构**
 
-   - File → New WebSocket Connection 创建新连接
-   - 输入 WebSocket URL (ws:// 或 wss://)
-   - 发送和接收消息，支持 JSON 格式化显示
-   - 切换不同的视图插件（JSON Tree View, Raw Log View）
+   - Tauri 2.0 提供原生性能和小体积
+   - React + TypeScript 确保类型安全
+   - Ant Design 提供专业 UI
 
-2. **Conda 环境管理**
+2. **标签页式界面**
 
-   - Tools → Conda Environment Manager
-   - 自动检测系统中的 Conda 安装
-   - 创建、更新、删除环境
-   - 从 environment.yml 文件创建环境
+   - Chrome 风格的标签管理
+   - 支持拖拽排序
+   - 多任务并行处理
 
-3. **VS Code 集成**
-   - Tools → Configure VS Code Workspace
-   - 选择项目目录和 Conda 环境
-   - 自动生成 .code-workspace 文件并打开 VS Code
+3. **WebSocket 调试器**
 
-### 扩展视图插件
+   - 实时连接管理
+   - JSON 树形视图
+   - 可扩展的视图插件系统
 
-创建自定义视图插件：
+4. **Conda 集成**
 
-```python
-from websocket_tool.views.base_view import BaseView
+   - 自动检测和安装
+   - 图形化环境管理
+   - 实时命令输出
 
-class CustomView(BaseView):
-    def setup_ui(self):
-        # 实现 UI 设置
-        pass
+5. **VS Code 集成**
 
-    def on_message_received(self, timestamp, message):
-        # 处理接收的消息
-        pass
+   - 一键配置工作区
+   - 自动设置 Python 解释器
+   - 项目环境绑定
 
-    def on_message_sent(self, timestamp, message):
-        # 处理发送的消息
-        pass
+6. **自动化部署**
+   - 跨平台构建
+   - 代码签名
+   - 自动更新支持
 
-    def get_view_name(self):
-        return "Custom View"
-```
-
-然后在 ConnectionWindow 中注册：
-
-```python
-window.register_view(CustomView())
-```
-
-这个完整的 PyDev-Toolkit 应用程序提供了您要求的所有功能，具有模块化、可扩展的架构，以及专业级的用户体验。
+这个 DevDeck 应用提供了一个现代化、高性能的开发工具平台，具有类似 VS Code 的专业外观和交互体验。

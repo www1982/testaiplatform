@@ -1,0 +1,23 @@
+# 建筑尺寸配置
+building_sizes:
+  farm_tile: [1, 1]
+  oxygen_diffuser: [2, 2]
+  manual_generator: [2, 2]
+  battery: [2, 1]
+  liquid_pump: [1, 2]
+  liquid_reservoir: [3, 3]
+  cot: [2, 1]
+  outhouse: [2, 3]
+  research_station: [3, 2]
+  storage_bin: [2, 2]
+  electrolizer: [2, 2]
+  coal_generator: [3, 3]
+
+# 建筑需求
+building_requirements:
+  farm_tile:
+    element: "Dirt"
+    amount: 200
+  oxygen_diffuser:
+    element: "RefinedMetal"
+    amount: 100

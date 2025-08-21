@@ -1,0 +1,40 @@
+name: Build and Upload
+
+on:
+  push:
+    branches: [main]
+
+jobs:
+  build:
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up Miniconda
+        uses: conda-incubator/setup-miniconda@v3
+        with:
+          auto-update-conda: true
+          python-version: 3.10
+      - name: Create conda environment
+        run: conda env create -f environment.yml
+      - name: Activate environment
+        run: conda activate oni-ai-env
+      - name: Run pytest
+        run: pytest
+      - name: Install pyinstaller
+        run: pip install pyinstaller
+      - name: Build executable
+        run: |
+          if [ "${{ runner.os }}" = "Windows" ]; then
+            pyinstaller --onefile --name oni-ai main.py
+            mv dist/oni-ai.exe dist/oni-ai
+          else
+            pyinstaller --onefile --name oni-ai main.py
+          fi
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: oni-ai-${{ matrix.os }}
+          path: dist/oni-ai

@@ -1,0 +1,29 @@
+# 动作空间定义
+actions:
+  Dig:
+    required_params: ["x", "y"]
+    optional_params: ["planet_id", "priority"]
+
+  Build:
+    required_params: ["building_type", "x", "y"]
+    optional_params: ["planet_id", "rotation"]
+
+  SetPriority:
+    required_params: ["task_id", "priority"]
+    optional_params: []
+
+  AssignDuplicant:
+    required_params: ["duplicant_name", "task_type"]
+    optional_params: ["schedule"]
+
+  Cancel:
+    required_params: ["task_id"]
+    optional_params: []
+
+  Harvest:
+    required_params: ["x", "y"]
+    optional_params: ["planet_id"]
+
+  Research:
+    required_params: ["tech_name"]
+    optional_params: ["research_station_id"]
